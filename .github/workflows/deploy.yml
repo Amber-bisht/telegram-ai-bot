@@ -1,0 +1,69 @@
+name: Deploy Telegram Bot
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  VPS_HOST: "YOUR_VPS_HOST"
+  APP_DIR: "/opt/tg-reply-bot"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install and Validate
+        run: |
+          npm ci
+          npm run check
+
+      - name: Copy App Files to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ env.VPS_HOST }}
+          username: root
+          password: ${{ secrets.VPS_PASSWORD }}
+          source: "src,Dockerfile,docker-compose.prod.yml,package.json,package-lock.json,.dockerignore"
+          target: ${{ env.APP_DIR }}
+
+      - name: Deploy Container on VPS
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          PROD_ENV: ${{ secrets.PROD_ENV }}
+        with:
+          host: ${{ env.VPS_HOST }}
+          username: root
+          password: ${{ secrets.VPS_PASSWORD }}
+          envs: PROD_ENV,APP_DIR
+          script_stop: true
+          script: |
+            set -eu
+            mkdir -p "${APP_DIR}"
+
+            cat > "${APP_DIR}/prod_env" <<EOF
+            $PROD_ENV
+            EOF
+            chmod 600 "${APP_DIR}/prod_env"
+
+            cd "${APP_DIR}"
+            if docker compose version >/dev/null 2>&1; then
+              docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
+            elif docker-compose version >/dev/null 2>&1; then
+              docker-compose -f docker-compose.prod.yml up -d --build --remove-orphans
+            else
+              echo "Docker Compose is not installed on the VPS."
+              exit 1
+            fi
+
+            docker image prune -f

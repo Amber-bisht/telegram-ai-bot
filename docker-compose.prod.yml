@@ -1,0 +1,9 @@
+services:
+  tg-reply-bot:
+    container_name: tg-reply-bot
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - prod_env
+    restart: unless-stopped

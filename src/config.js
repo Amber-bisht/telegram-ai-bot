@@ -1,0 +1,57 @@
+import dotenv from "dotenv";
+
+dotenv.config();
+
+function requiredEnv(key) {
+  const value = process.env[key];
+  if (!value || !value.trim()) {
+    throw new Error(`Missing required environment variable: ${key}`);
+  }
+  return value.trim();
+}
+
+function toNumber(value, key) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Invalid numeric value for ${key}: ${value}`);
+  }
+  return parsed;
+}
+
+function toNumberList(value, key) {
+  const tokens = String(value)
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (!tokens.length) {
+    throw new Error(`Missing numeric values for ${key}`);
+  }
+
+  const out = [];
+  for (const token of tokens) {
+    const num = Number(token);
+    if (!Number.isFinite(num)) {
+      throw new Error(`Invalid numeric value in ${key}: ${token}`);
+    }
+    out.push(num);
+  }
+  return out;
+}
+
+const ownerUsername = requiredEnv("OWNER_USERNAME").replace(/^@/, "").toLowerCase();
+const ownerUserId = toNumber(requiredEnv("OWNER_USER_ID"), "OWNER_USER_ID");
+const ownerChatIdEnv = process.env.OWNER_CHAT_ID?.trim();
+
+export const config = {
+  telegramBotToken: requiredEnv("TELEGRAM_BOT_TOKEN"),
+  assistantName: process.env.ASSISTANT_NAME?.trim() || "Makima",
+  ownerName: requiredEnv("OWNER_NAME"),
+  ownerUsername,
+  ownerUserId,
+  ownerChatId: ownerChatIdEnv ? toNumber(ownerChatIdEnv, "OWNER_CHAT_ID") : ownerUserId,
+  authGroupIds: toNumberList(requiredEnv("AUTH_GROUP_IDS"), "AUTH_GROUP_IDS"),
+  mongoUri: requiredEnv("MONGODB_URI"),
+  groqApiKey: requiredEnv("GROQ_API_KEY"),
+  groqModel: process.env.GROQ_MODEL?.trim() || "llama-3.3-70b-versatile",
+  cacheMaxUsers: Number(process.env.CACHE_MAX_USERS || 5000)
+};

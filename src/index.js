@@ -1,0 +1,316 @@
+import TelegramBot from "node-telegram-bot-api";
+import { config } from "./config.js";
+import { connectMongo } from "./db/mongo.js";
+import { FastMemoryIndex } from "./services/FastMemoryIndex.js";
+import { GroqService } from "./services/GroqService.js";
+import { isContactRequestIntent } from "./services/contactIntent.js";
+import { MemoryService } from "./services/MemoryService.js";
+import {
+  containsOwnerMention,
+  displayName,
+  getMessageTextAndEntities,
+  isGroupChat,
+  isPrivateChat,
+  stripOwnerMention
+} from "./utils/telegram.js";
+
+function toCommand(text) {
+  const [head] = text.trim().split(/\s+/);
+  return head.split("@")[0].toLowerCase();
+}
+
+function helpText() {
+  return [
+    "Owner commands:",
+    "/stats",
+    "/memory [user_id]",
+    "/feed <text>",
+    "/feed",
+    "/clear_user <user_id>",
+    "/reply <user_id> <message>"
+  ].join("\n");
+}
+
+function formatGroupName(chat) {
+  if (chat.title) return chat.title;
+  if (chat.username) return `@${chat.username}`;
+  return String(chat.id);
+}
+
+function formatNotificationMessage({ msg, cleanedText }) {
+  const user = msg.from;
+  const group = msg.chat;
+
+  return [
+    "User Request Notification",
+    "",
+    `User: ${displayName(user)}`,
+    `User ID: ${user.id}`,
+    `Group: ${formatGroupName(group)}`,
+    "",
+    "Message:",
+    `"${cleanedText}"`
+  ].join("\n");
+}
+
+async function bootstrap() {
+  await connectMongo(config.mongoUri);
+  console.log("Connected to MongoDB");
+
+  const cache = new FastMemoryIndex(config.cacheMaxUsers);
+  const memoryService = new MemoryService({ cache });
+  const groqService = new GroqService({
+    apiKey: config.groqApiKey,
+    model: config.groqModel
+  });
+  const authorizedGroups = new Set(config.authGroupIds.map(String));
+
+  const bot = new TelegramBot(config.telegramBotToken, { polling: true });
+  const botProfile = await bot.getMe();
+  const botUserId = botProfile.id;
+
+  bot.on("polling_error", (error) => {
+    console.error("Telegram polling error:", error.message);
+  });
+
+  async function sendOwnerNotification(msg, cleanedText) {
+    try {
+      const body = formatNotificationMessage({ msg, cleanedText });
+      await bot.sendMessage(config.ownerChatId, body);
+    } catch (error) {
+      console.error("Failed to notify owner:", error.message);
+    }
+  }
+
+  async function handleOwnerPrivateMessage(msg, text) {
+    const command = toCommand(text);
+    const args = text.trim().split(/\s+/).slice(1);
+
+    if (command === "/start" || command === "/help") {
+      await bot.sendMessage(msg.chat.id, helpText());
+      return;
+    }
+
+    if (command === "/stats") {
+      const stats = await memoryService.getStats();
+      const response = [
+        "Bot Stats",
+        "",
+        `Total users in memory: ${stats.totalUsers}`,
+        `Total contact requests: ${stats.totalContactRequests}`,
+        `Cache size: ${stats.cache.size}`,
+        `Cache hits: ${stats.cache.hits}`,
+        `Cache misses: ${stats.cache.misses}`
+      ].join("\n");
+      await bot.sendMessage(msg.chat.id, response);
+      return;
+    }
+
+    if (command === "/memory") {
+      if (args[0]) {
+        const userId = Number(args[0]);
+        if (!Number.isFinite(userId)) {
+          await bot.sendMessage(msg.chat.id, "Usage: /memory <user_id>");
+          return;
+        }
+        const memory = await memoryService.getUserMemory(userId);
+        if (!memory) {
+          await bot.sendMessage(msg.chat.id, `No memory found for user ${userId}.`);
+          return;
+        }
+        const details = [
+          `User ID: ${memory.userId}`,
+          `Name: ${memory.name || "Unknown"}`,
+          `Username: ${memory.username ? `@${memory.username}` : "Unknown"}`,
+          `Facts: ${(memory.facts || []).join(" | ") || "None"}`,
+          `Past Questions: ${(memory.pastQuestions || []).join(" | ") || "None"}`,
+          `Summaries: ${(memory.conversationSummaries || []).join(" | ") || "None"}`,
+          `Last Seen Group: ${memory.lastSeenGroup?.title || memory.lastSeenGroup?.id || "Unknown"}`
+        ].join("\n");
+        await bot.sendMessage(msg.chat.id, details);
+        return;
+      }
+
+      const items = await memoryService.listRecentMemories(15);
+      if (!items.length) {
+        await bot.sendMessage(msg.chat.id, "No user memory found yet.");
+        return;
+      }
+      const lines = items.map((item) => {
+        const label = item.name || item.username || item.userId;
+        return `${item.userId} - ${label} (facts: ${item.facts?.length || 0}, questions: ${item.pastQuestions?.length || 0})`;
+      });
+      await bot.sendMessage(msg.chat.id, ["Recent memory entries:", ...lines].join("\n"));
+      return;
+    }
+
+    if (command === "/feed") {
+      const rawFeedText = text.replace(/^\/feed(?:@\w+)?\s*/i, "").trim();
+
+      if (!rawFeedText) {
+        const notes = await memoryService.getOwnerFeed(config.ownerUserId);
+        if (!notes.length) {
+          await bot.sendMessage(
+            msg.chat.id,
+            "No feed memory yet.\nUsage: /feed - your instruction or personal context"
+          );
+          return;
+        }
+
+        const recent = notes.slice(-15);
+        const lines = recent.map((note, idx) => `${idx + 1}. ${note}`);
+        await bot.sendMessage(msg.chat.id, ["Owner feed memory (latest):", ...lines].join("\n"));
+        return;
+      }
+
+      const cleanedFeed = rawFeedText.replace(/^\-\s*/, "").trim();
+      if (!cleanedFeed) {
+        await bot.sendMessage(msg.chat.id, "Usage: /feed - your instruction or personal context");
+        return;
+      }
+
+      const result = await memoryService.addOwnerFeed(config.ownerUserId, cleanedFeed);
+      await bot.sendMessage(
+        msg.chat.id,
+        `Feed saved.\nTotal stored feed notes: ${result.notes.length}`
+      );
+      return;
+    }
+
+    if (command === "/clear_user") {
+      const userId = Number(args[0]);
+      if (!Number.isFinite(userId)) {
+        await bot.sendMessage(msg.chat.id, "Usage: /clear_user <user_id>");
+        return;
+      }
+      await memoryService.clearUser(userId);
+      await bot.sendMessage(msg.chat.id, `Cleared memory for user ${userId}.`);
+      return;
+    }
+
+    if (command === "/reply") {
+      const userId = Number(args[0]);
+      const replyText = text.trim().split(/\s+/).slice(2).join(" ").trim();
+
+      if (!Number.isFinite(userId) || !replyText) {
+        await bot.sendMessage(msg.chat.id, "Usage: /reply <user_id> <message>");
+        return;
+      }
+
+      try {
+        await bot.sendMessage(userId, replyText);
+        await bot.sendMessage(msg.chat.id, `Reply sent to ${userId}.`);
+      } catch (error) {
+        await bot.sendMessage(
+          msg.chat.id,
+          `Could not send message to ${userId}. They may not have started the bot in DM.`
+        );
+      }
+      return;
+    }
+
+    await bot.sendMessage(msg.chat.id, helpText());
+  }
+
+  async function handlePrivateMessage(msg) {
+    const { text } = getMessageTextAndEntities(msg);
+    if (msg.from.id === config.ownerUserId) {
+      if (!text || !text.trim()) {
+        await bot.sendMessage(msg.chat.id, helpText());
+        return;
+      }
+      await handleOwnerPrivateMessage(msg, text);
+      return;
+    }
+
+    const privateText = [
+      "Welcome.",
+      "This bot only works in Telegram groups.",
+      `Please tag @${config.ownerUsername} in a group to interact.`,
+      "",
+      `${config.assistantName} is assistant to ${config.ownerName}.`,
+      "",
+      "This bot does not support private chat.",
+      "Use it inside groups only."
+    ].join("\n");
+
+    await bot.sendMessage(msg.chat.id, privateText);
+  }
+
+  async function handleGroupMessage(msg) {
+    if (!authorizedGroups.has(String(msg.chat.id))) return;
+
+    const { text } = getMessageTextAndEntities(msg);
+    if (!text || !text.trim()) return;
+
+    const isReplyToBot = msg.reply_to_message?.from?.id === botUserId;
+    const hasOwnerMention = containsOwnerMention(msg, config.ownerUsername, config.ownerUserId);
+    if (!hasOwnerMention && !isReplyToBot) return;
+
+    const cleanedText = hasOwnerMention ? stripOwnerMention(text, config.ownerUsername) : text.trim();
+    await memoryService.touchUser(msg.from, msg.chat);
+
+    if (isContactRequestIntent(cleanedText, config.ownerUsername)) {
+      await bot.sendMessage(msg.chat.id, "Your message has been forwarded.", {
+        reply_to_message_id: msg.message_id,
+        allow_sending_without_reply: true
+      });
+      await memoryService.logContactRequest({
+        message: cleanedText || text,
+        user: msg.from,
+        chat: msg.chat
+      });
+      await sendOwnerNotification(msg, cleanedText || text);
+      return;
+    }
+
+    const userMemory = await memoryService.getUserMemory(msg.from.id);
+    const ownerFeedNotes = await memoryService.getOwnerFeed(config.ownerUserId);
+    const reply = await groqService.generateOwnerReply({
+      assistantName: config.assistantName,
+      ownerName: config.ownerName,
+      ownerUsername: config.ownerUsername,
+      groupTitle: msg.chat.title,
+      currentDateTime: new Date().toISOString(),
+      ownerFeedNotes,
+      messageText: cleanedText || text,
+      userMemory,
+      fromName: displayName(msg.from)
+    });
+
+    await bot.sendMessage(msg.chat.id, reply, {
+      reply_to_message_id: msg.message_id,
+      allow_sending_without_reply: true
+    });
+
+    const extracted = await groqService.extractMeaningfulMemory({
+      messageText: cleanedText || text,
+      botReply: reply
+    });
+    await memoryService.mergeExtractedMemory(msg.from.id, extracted);
+  }
+
+  bot.on("message", async (msg) => {
+    try {
+      if (!msg?.from || msg.from.is_bot) return;
+      if (isPrivateChat(msg.chat.type)) {
+        await handlePrivateMessage(msg);
+        return;
+      }
+      if (isGroupChat(msg.chat.type)) {
+        await handleGroupMessage(msg);
+      }
+    } catch (error) {
+      console.error("Message handler failed:", error);
+    }
+  });
+
+  console.log(
+    `Bot is running as ${config.assistantName} (@${botProfile.username || "unknown"}). Authorized groups: ${config.authGroupIds.join(", ")}`
+  );
+}
+
+bootstrap().catch((error) => {
+  console.error("Fatal startup error:", error);
+  process.exit(1);
+});
