@@ -1,4 +1,4 @@
-# Telegram Owner-Reply Bot (JavaScript)
+# Telegram Owner-Reply Bot (JavaScript) lets goo
 
 Telegram bot that:
 - responds in groups when `@OWNER_USERNAME` is tagged or users reply to bot messages
