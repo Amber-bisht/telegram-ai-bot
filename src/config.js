@@ -55,7 +55,7 @@ const ownerChatIdEnv = process.env.OWNER_CHAT_ID?.trim();
 const groqApiKeysRaw = process.env.GROQ_API_KEYS?.trim();
 const groqApiKeys = groqApiKeysRaw
   ? toStringList(groqApiKeysRaw, "GROQ_API_KEYS")
-  : [requiredEnv("GROQ_API_KEY")];
+  : toStringList(requiredEnv("GROQ_API_KEY"), "GROQ_API_KEY");
 
 export const config = {
   telegramBotToken: requiredEnv("TELEGRAM_BOT_TOKEN"),

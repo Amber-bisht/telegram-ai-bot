@@ -118,3 +118,13 @@ npm start
   - copies app files to VPS path `/opt/tg-reply-bot`
   - writes `prod_env` on VPS from `PROD_ENV` secret
   - runs `docker compose -f docker-compose.prod.yml up -d --build --remove-orphans`
+
+## Groq Key Testing
+- Preferred env format:
+  - `GROQ_API_KEYS=key1,key2,key3`
+- Supported fallback format:
+  - `GROQ_API_KEY=key1,key2,key3` (comma-separated list is also parsed)
+- Test keys from env:
+  - `npm run test:groq-keys`
+- Test keys directly:
+  - `npm run test:groq-keys -- "key1,key2,key3"`

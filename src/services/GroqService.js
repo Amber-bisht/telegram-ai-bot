@@ -85,11 +85,16 @@ export class GroqService {
     this.model = model;
   }
 
-  isRateLimitLikeError(error) {
+  isRetryableKeyError(error) {
     const status = error?.status || error?.response?.status || 0;
     const message = String(error?.message || "").toLowerCase();
+    const code = String(error?.code || error?.error?.code || "").toLowerCase();
     return (
       status === 429 ||
+      status === 401 ||
+      status === 403 ||
+      code === "invalid_api_key" ||
+      message.includes("invalid api key") ||
       message.includes("rate limit") ||
       message.includes("too many requests") ||
       message.includes("quota") ||
@@ -111,10 +116,10 @@ export class GroqService {
         return result;
       } catch (error) {
         lastError = error;
-        if (this.isRateLimitLikeError(error) && attempt < total - 1) {
+        if (this.isRetryableKeyError(error) && attempt < total - 1) {
           this.nextClientIndex = (idx + 1) % total;
           console.warn(
-            `Groq key index ${idx + 1} hit rate/quota limit. Trying next key...`
+            `Groq key index ${idx + 1} failed (rate/auth/quota). Trying next key...`
           );
           continue;
         }
