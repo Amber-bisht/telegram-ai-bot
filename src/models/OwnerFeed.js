@@ -11,7 +11,9 @@ const FeedNoteSchema = new mongoose.Schema(
 const OwnerFeedSchema = new mongoose.Schema(
   {
     ownerUserId: { type: Number, required: true, unique: true, index: true },
-    notes: { type: [FeedNoteSchema], default: [] }
+    notes: { type: [FeedNoteSchema], default: [] },
+    knowledgeNotes: { type: [FeedNoteSchema], default: [] },
+    ignoredUserIds: { type: [Number], default: [] }
   },
   { timestamps: true }
 );

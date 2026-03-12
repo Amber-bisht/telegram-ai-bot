@@ -73,9 +73,56 @@ function heuristicMemoryExtract(messageText) {
 }
 
 export class GroqService {
-  constructor({ apiKey, model }) {
-    this.client = new Groq({ apiKey });
+  constructor({ apiKeys = [], apiKey, model }) {
+    const keys = Array.isArray(apiKeys) ? apiKeys : [];
+    const mergedKeys = [...keys, apiKey].filter(Boolean);
+    if (!mergedKeys.length) {
+      throw new Error("GroqService requires at least one API key.");
+    }
+
+    this.clients = mergedKeys.map((key) => new Groq({ apiKey: key }));
+    this.nextClientIndex = 0;
     this.model = model;
+  }
+
+  isRateLimitLikeError(error) {
+    const status = error?.status || error?.response?.status || 0;
+    const message = String(error?.message || "").toLowerCase();
+    return (
+      status === 429 ||
+      message.includes("rate limit") ||
+      message.includes("too many requests") ||
+      message.includes("quota") ||
+      message.includes("exceeded your current quota")
+    );
+  }
+
+  async createCompletionWithFailover(payload) {
+    let lastError = null;
+    const total = this.clients.length;
+
+    for (let attempt = 0; attempt < total; attempt += 1) {
+      const idx = (this.nextClientIndex + attempt) % total;
+      const client = this.clients[idx];
+
+      try {
+        const result = await client.chat.completions.create(payload);
+        this.nextClientIndex = idx;
+        return result;
+      } catch (error) {
+        lastError = error;
+        if (this.isRateLimitLikeError(error) && attempt < total - 1) {
+          this.nextClientIndex = (idx + 1) % total;
+          console.warn(
+            `Groq key index ${idx + 1} hit rate/quota limit. Trying next key...`
+          );
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    throw lastError;
   }
 
   async generateOwnerReply({
@@ -85,19 +132,22 @@ export class GroqService {
     groupTitle,
     currentDateTime,
     ownerFeedNotes,
+    ownerKnowledgeNotes,
+    sarcasmMode,
     messageText,
     userMemory,
     fromName
   }) {
     const memoryContext = {
       name: userMemory?.name || null,
+      about: userMemory?.about || [],
       facts: userMemory?.facts || [],
       pastQuestions: userMemory?.pastQuestions || [],
       conversationSummaries: userMemory?.conversationSummaries || []
     };
 
     try {
-      const completion = await this.client.chat.completions.create({
+      const completion = await this.createCompletionWithFailover({
         model: this.model,
         temperature: 0.4,
         max_tokens: 300,
@@ -110,6 +160,9 @@ export class GroqService {
               `Write replies as if they are directly from ${ownerName} in first person.`,
               "Never mention being a bot, AI, assistant, automation, or system.",
               "Keep responses concise and useful (1-4 short sentences).",
+              sarcasmMode === "sarcastic"
+                ? "Use a mildly sarcastic tone in this reply while still being helpful and respectful."
+                : "Use a straightforward, non-sarcastic tone in this reply.",
               "Use known user context and owner feed instructions only when relevant."
             ].join(" ")
           },
@@ -121,7 +174,8 @@ export class GroqService {
               `User: ${fromName || "Unknown"}`,
               `Incoming message: ${messageText}`,
               `Known user memory: ${JSON.stringify(memoryContext)}`,
-              `Owner feed memory: ${JSON.stringify((ownerFeedNotes || []).slice(-25))}`
+              `Owner feed memory: ${JSON.stringify((ownerFeedNotes || []).slice(-25))}`,
+              `Shared owner knowledge (/text): ${JSON.stringify((ownerKnowledgeNotes || []).slice(-80))}`
             ].join("\n")
           }
         ]
@@ -134,12 +188,12 @@ export class GroqService {
     }
 
     const knownName = userMemory?.name || fromName || "there";
-    return `Hi ${knownName}. Thanks for tagging me. Could you share a bit more detail so I can help properly?`;
+    return `Hi ${knownName}, thanks for tagging me. Wait for sometime, I have hit my limit.`;
   }
 
   async extractMeaningfulMemory({ messageText, botReply }) {
     try {
-      const completion = await this.client.chat.completions.create({
+      const completion = await this.createCompletionWithFailover({
         model: this.model,
         temperature: 0.1,
         max_tokens: 220,

@@ -41,6 +41,46 @@ export class MemoryService {
     this.ownerFeedCache = new Map();
   }
 
+  normalizeOwnerState(doc) {
+    const notes = (doc?.notes || [])
+      .map((note) => compactText(note.text, 800))
+      .filter(Boolean);
+    const knowledgeNotes = (doc?.knowledgeNotes || [])
+      .map((note) => compactText(note.text, 800))
+      .filter(Boolean);
+
+    const ignoredUserIds = Array.from(
+      new Set(
+        (doc?.ignoredUserIds || [])
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id))
+      )
+    );
+
+    return { notes, knowledgeNotes, ignoredUserIds };
+  }
+
+  async getOwnerState(ownerUserId) {
+    const key = String(ownerUserId);
+    const cached = this.ownerFeedCache.get(key);
+    if (cached) {
+      return {
+        notes: [...cached.notes],
+        knowledgeNotes: [...cached.knowledgeNotes],
+        ignoredUserIds: [...cached.ignoredUserIds]
+      };
+    }
+
+    const doc = await OwnerFeed.findOne({ ownerUserId }).lean();
+    const normalized = this.normalizeOwnerState(doc);
+    this.ownerFeedCache.set(key, normalized);
+    return {
+      notes: [...normalized.notes],
+      knowledgeNotes: [...normalized.knowledgeNotes],
+      ignoredUserIds: [...normalized.ignoredUserIds]
+    };
+  }
+
   async touchUser(user, chat) {
     const now = new Date();
     const doc = await UserMemory.findOneAndUpdate(
@@ -49,6 +89,7 @@ export class MemoryService {
         $setOnInsert: {
           userId: user.id,
           name: user.first_name || null,
+          about: [],
           facts: [],
           conversationSummaries: [],
           pastQuestions: []
@@ -140,6 +181,7 @@ export class MemoryService {
         $setOnInsert: {
           userId: user.id,
           name: user.first_name || null,
+          about: [],
           facts: [],
           conversationSummaries: [],
           pastQuestions: []
@@ -185,17 +227,45 @@ export class MemoryService {
   }
 
   async getOwnerFeed(ownerUserId) {
-    const key = String(ownerUserId);
-    const cached = this.ownerFeedCache.get(key);
-    if (cached) return [...cached];
+    const state = await this.getOwnerState(ownerUserId);
+    return state.notes;
+  }
 
-    const doc = await OwnerFeed.findOne({ ownerUserId }).lean();
-    const notes = (doc?.notes || [])
-      .map((note) => compactText(note.text, 800))
-      .filter(Boolean);
+  async getOwnerKnowledge(ownerUserId) {
+    const state = await this.getOwnerState(ownerUserId);
+    return state.knowledgeNotes;
+  }
 
-    this.ownerFeedCache.set(key, notes);
-    return [...notes];
+  async getIgnoredUserIds(ownerUserId) {
+    const state = await this.getOwnerState(ownerUserId);
+    return state.ignoredUserIds;
+  }
+
+  async addIgnoredUser(ownerUserId, targetUserId) {
+    const userId = Number(targetUserId);
+    if (!Number.isFinite(userId)) {
+      throw new Error("Invalid user ID for ignore.");
+    }
+
+    const updated = await OwnerFeed.findOneAndUpdate(
+      { ownerUserId },
+      {
+        $setOnInsert: {
+          ownerUserId,
+          notes: [],
+          knowledgeNotes: [],
+          ignoredUserIds: []
+        },
+        $addToSet: {
+          ignoredUserIds: userId
+        }
+      },
+      { upsert: true, new: true, lean: true }
+    );
+
+    const normalized = this.normalizeOwnerState(updated);
+    this.ownerFeedCache.set(String(ownerUserId), normalized);
+    return normalized.ignoredUserIds;
   }
 
   async addOwnerFeed(ownerUserId, rawText) {
@@ -207,7 +277,7 @@ export class MemoryService {
     const updated = await OwnerFeed.findOneAndUpdate(
       { ownerUserId },
       {
-        $setOnInsert: { ownerUserId },
+        $setOnInsert: { ownerUserId, ignoredUserIds: [], knowledgeNotes: [] },
         $push: {
           notes: {
             $each: [{ text, createdAt: new Date() }],
@@ -218,14 +288,76 @@ export class MemoryService {
       { upsert: true, new: true, lean: true }
     );
 
-    const notes = (updated?.notes || [])
-      .map((note) => compactText(note.text, 800))
-      .filter(Boolean);
-
-    this.ownerFeedCache.set(String(ownerUserId), notes);
+    const normalized = this.normalizeOwnerState(updated);
+    this.ownerFeedCache.set(String(ownerUserId), normalized);
     return {
       added: text,
-      notes
+      notes: normalized.notes
     };
+  }
+
+  async addOwnerKnowledge(ownerUserId, rawText) {
+    const text = compactText(rawText, 800);
+    if (!text) {
+      throw new Error("Text knowledge is empty.");
+    }
+
+    const updated = await OwnerFeed.findOneAndUpdate(
+      { ownerUserId },
+      {
+        $setOnInsert: { ownerUserId, ignoredUserIds: [], notes: [] },
+        $push: {
+          knowledgeNotes: {
+            $each: [{ text, createdAt: new Date() }],
+            $slice: -220
+          }
+        }
+      },
+      { upsert: true, new: true, lean: true }
+    );
+
+    const normalized = this.normalizeOwnerState(updated);
+    this.ownerFeedCache.set(String(ownerUserId), normalized);
+    return {
+      added: text,
+      knowledgeNotes: normalized.knowledgeNotes
+    };
+  }
+
+  async addUserManualData(userId, rawText) {
+    const targetUserId = Number(userId);
+    if (!Number.isFinite(targetUserId)) {
+      throw new Error("Invalid user ID for /data.");
+    }
+
+    const text = compactText(rawText, 800);
+    if (!text) {
+      throw new Error("Data text is empty.");
+    }
+
+    const current = (await this.getUserMemory(targetUserId)) || {};
+    const nextAbout = dedupeStrings([...(current.about || []), text], 80);
+
+    const updated = await UserMemory.findOneAndUpdate(
+      { userId: targetUserId },
+      {
+        $setOnInsert: {
+          userId: targetUserId,
+          name: current.name || null,
+          about: [],
+          facts: [],
+          conversationSummaries: [],
+          pastQuestions: []
+        },
+        $set: {
+          about: nextAbout,
+          lastInteractionAt: new Date()
+        }
+      },
+      { upsert: true, new: true, lean: true }
+    );
+
+    this.cache.set(targetUserId, updated);
+    return updated;
   }
 }

@@ -14,6 +14,7 @@ const UserMemorySchema = new mongoose.Schema(
     userId: { type: Number, required: true, unique: true, index: true },
     username: { type: String, default: null },
     name: { type: String, default: null },
+    about: { type: [String], default: [] },
     facts: { type: [String], default: [] },
     conversationSummaries: { type: [String], default: [] },
     pastQuestions: { type: [String], default: [] },

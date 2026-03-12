@@ -26,6 +26,10 @@ function helpText() {
     "/memory [user_id]",
     "/feed <text>",
     "/feed",
+    "/text <knowledge>",
+    "/text",
+    "/data <user_id> <text>",
+    "/ignore <user_id> (also /ingore)",
     "/clear_user <user_id>",
     "/reply <user_id> <message>"
   ].join("\n");
@@ -60,7 +64,7 @@ async function bootstrap() {
   const cache = new FastMemoryIndex(config.cacheMaxUsers);
   const memoryService = new MemoryService({ cache });
   const groqService = new GroqService({
-    apiKey: config.groqApiKey,
+    apiKeys: config.groqApiKeys,
     model: config.groqModel
   });
   const authorizedGroups = new Set(config.authGroupIds.map(String));
@@ -122,6 +126,7 @@ async function bootstrap() {
           `User ID: ${memory.userId}`,
           `Name: ${memory.name || "Unknown"}`,
           `Username: ${memory.username ? `@${memory.username}` : "Unknown"}`,
+          `About: ${(memory.about || []).join(" | ") || "None"}`,
           `Facts: ${(memory.facts || []).join(" | ") || "None"}`,
           `Past Questions: ${(memory.pastQuestions || []).join(" | ") || "None"}`,
           `Summaries: ${(memory.conversationSummaries || []).join(" | ") || "None"}`,
@@ -173,6 +178,75 @@ async function bootstrap() {
       await bot.sendMessage(
         msg.chat.id,
         `Feed saved.\nTotal stored feed notes: ${result.notes.length}`
+      );
+      return;
+    }
+
+    if (command === "/text") {
+      const rawText = text.replace(/^\/text(?:@\w+)?\s*/i, "").trim();
+
+      if (!rawText) {
+        const knowledgeNotes = await memoryService.getOwnerKnowledge(config.ownerUserId);
+        if (!knowledgeNotes.length) {
+          await bot.sendMessage(
+            msg.chat.id,
+            "No shared text knowledge yet.\nUsage: /text - knowledge you want bot to remember"
+          );
+          return;
+        }
+
+        const recent = knowledgeNotes.slice(-20);
+        const lines = recent.map((note, idx) => `${idx + 1}. ${note}`);
+        await bot.sendMessage(msg.chat.id, ["Shared text knowledge (latest):", ...lines].join("\n"));
+        return;
+      }
+
+      const cleanedText = rawText.replace(/^\-\s*/, "").trim();
+      if (!cleanedText) {
+        await bot.sendMessage(msg.chat.id, "Usage: /text - knowledge you want bot to remember");
+        return;
+      }
+
+      const result = await memoryService.addOwnerKnowledge(config.ownerUserId, cleanedText);
+      await bot.sendMessage(
+        msg.chat.id,
+        `Text knowledge saved.\nTotal shared text notes: ${result.knowledgeNotes.length}`
+      );
+      return;
+    }
+
+    if (command === "/data") {
+      const match = text.match(/^\/data(?:@\w+)?\s+(-?\d+)\s+([\s\S]+)/i);
+      if (!match) {
+        await bot.sendMessage(msg.chat.id, "Usage: /data <user_id> <text>");
+        return;
+      }
+
+      const userId = Number(match[1]);
+      const manualText = match[2]?.trim();
+      if (!Number.isFinite(userId) || !manualText) {
+        await bot.sendMessage(msg.chat.id, "Usage: /data <user_id> <text>");
+        return;
+      }
+
+      const updated = await memoryService.addUserManualData(userId, manualText);
+      await bot.sendMessage(
+        msg.chat.id,
+        `Manual user data saved for ${userId}.\nAbout entries: ${(updated.about || []).length}`
+      );
+      return;
+    }
+
+    if (command === "/ignore" || command === "/ingore") {
+      const userId = Number(args[0]);
+      if (!Number.isFinite(userId)) {
+        await bot.sendMessage(msg.chat.id, "Usage: /ignore <user_id>");
+        return;
+      }
+      const ignored = await memoryService.addIgnoredUser(config.ownerUserId, userId);
+      await bot.sendMessage(
+        msg.chat.id,
+        `User ${userId} added to ignore list.\nIgnored users count: ${ignored.length}`
       );
       return;
     }
@@ -243,6 +317,9 @@ async function bootstrap() {
     const { text } = getMessageTextAndEntities(msg);
     if (!text || !text.trim()) return;
 
+    const ignoredUserIds = await memoryService.getIgnoredUserIds(config.ownerUserId);
+    if (ignoredUserIds.includes(msg.from.id)) return;
+
     const isReplyToBot = msg.reply_to_message?.from?.id === botUserId;
     const hasOwnerMention = containsOwnerMention(msg, config.ownerUsername, config.ownerUserId);
     if (!hasOwnerMention && !isReplyToBot) return;
@@ -266,6 +343,7 @@ async function bootstrap() {
 
     const userMemory = await memoryService.getUserMemory(msg.from.id);
     const ownerFeedNotes = await memoryService.getOwnerFeed(config.ownerUserId);
+    const ownerKnowledgeNotes = await memoryService.getOwnerKnowledge(config.ownerUserId);
     const reply = await groqService.generateOwnerReply({
       assistantName: config.assistantName,
       ownerName: config.ownerName,
@@ -273,6 +351,8 @@ async function bootstrap() {
       groupTitle: msg.chat.title,
       currentDateTime: new Date().toISOString(),
       ownerFeedNotes,
+      ownerKnowledgeNotes,
+      sarcasmMode: Math.random() < 0.5 ? "sarcastic" : "neutral",
       messageText: cleanedText || text,
       userMemory,
       fromName: displayName(msg.from)

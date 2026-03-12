@@ -39,7 +39,8 @@ npm start
 - `OWNER_CHAT_ID`: Optional; where owner notifications are sent (defaults to `OWNER_USER_ID`)
 - `AUTH_GROUP_IDS`: Comma-separated allowed group IDs (example: `-1002231076068,-4999803462`)
 - `MONGODB_URI`: MongoDB connection string
-- `GROQ_API_KEY`: Groq API key
+- `GROQ_API_KEYS`: Comma-separated Groq API keys for fallback (example: `key1,key2,key3`)
+- `GROQ_API_KEY`: Optional single key fallback (used only when `GROQ_API_KEYS` is not set)
 - `GROQ_MODEL`: Groq model name (default: `llama-3.3-70b-versatile`)
 - `CACHE_MAX_USERS`: Max user memories kept in in-memory index
 
@@ -57,6 +58,13 @@ npm start
     - else:
       - generates owner-style reply with Groq
       - stores only meaningful memory signals (name, facts, summaries, past questions)
+      - uses shared owner text knowledge (`/text`) and manual user about-data (`/data`) when relevant
+  - if Groq key 1 is rate-limited/quota-exhausted, bot automatically retries with next key from `GROQ_API_KEYS`
+  - if all Groq keys are exhausted, bot sends:
+    - `Hi <name>, thanks for tagging me. Wait for sometime, I have hit my limit.`
+  - tone behavior:
+    - around 50% replies use a mildly sarcastic tone
+    - other replies stay straightforward
 
 - Private chat:
   - owner can use commands
@@ -70,6 +78,10 @@ npm start
 - `/memory <user_id>`
 - `/feed <text>` (add owner context/instructions used in future replies)
 - `/feed` (view latest stored owner feed memory)
+- `/text <knowledge>` (store shared knowledge for all future replies)
+- `/text` (view latest shared knowledge notes)
+- `/data <user_id> <text>` (store manual about-data for any user, even if they never interacted)
+- `/ignore <user_id>` (alias: `/ingore <user_id>`) so bot will not reply to that user in groups
 - `/clear_user <user_id>`
 - `/reply <user_id> <message>`
 
@@ -83,10 +95,9 @@ npm start
 - Workflow file: `.github/workflows/deploy.yml`
 - Deployment is Docker-based (`Dockerfile` + `docker-compose.prod.yml`)
 - VPS user is hardcoded as `root` in workflow
-- VPS host is set in workflow env:
-  - `VPS_HOST: "YOUR_VPS_HOST"` (replace with your real host/IP)
 
 ### Required GitHub Secrets
+- `VPS_HOST`: VPS public IP or domain
 - `VPS_PASSWORD`: SSH password for root user
 - `PROD_ENV`: Full app env file contents (all runtime envs), for example:
   - `TELEGRAM_BOT_TOKEN=...`
@@ -97,7 +108,7 @@ npm start
   - `OWNER_CHAT_ID=...`
   - `AUTH_GROUP_IDS=...`
   - `MONGODB_URI=...`
-  - `GROQ_API_KEY=...`
+  - `GROQ_API_KEYS=key1,key2,key3`
   - `GROQ_MODEL=...`
   - `CACHE_MAX_USERS=5000`
 
