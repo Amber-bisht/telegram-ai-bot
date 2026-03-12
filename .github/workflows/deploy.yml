@@ -7,7 +7,6 @@ on:
   workflow_dispatch:
 
 env:
-  VPS_HOST: "YOUR_VPS_HOST"
   APP_DIR: "/opt/tg-reply-bot"
 
 jobs:
@@ -31,7 +30,7 @@ jobs:
       - name: Copy App Files to VPS
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ env.VPS_HOST }}
+          host: ${{ secrets.VPS_HOST }}
           username: root
           password: ${{ secrets.VPS_PASSWORD }}
           source: "src,Dockerfile,docker-compose.prod.yml,package.json,package-lock.json,.dockerignore"
@@ -42,7 +41,7 @@ jobs:
         env:
           PROD_ENV: ${{ secrets.PROD_ENV }}
         with:
-          host: ${{ env.VPS_HOST }}
+          host: ${{ secrets.VPS_HOST }}
           username: root
           password: ${{ secrets.VPS_PASSWORD }}
           envs: PROD_ENV,APP_DIR
