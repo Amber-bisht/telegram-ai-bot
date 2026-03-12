@@ -90,6 +90,8 @@ async function bootstrap() {
   const bot = new TelegramBot(config.telegramBotToken, { polling: true });
   const botProfile = await bot.getMe();
   const botUserId = botProfile.id;
+  const effectiveBotUsername =
+    (config.botUsername || botProfile.username || "").replace(/^@/, "").toLowerCase() || null;
 
   bot.on("polling_error", (error) => {
     console.error("Telegram polling error:", error.message);
@@ -373,16 +375,27 @@ async function bootstrap() {
     const ignoredUserIds = await memoryService.getIgnoredUserIds(config.ownerUserId);
     if (ignoredUserIds.includes(msg.from.id)) return;
 
-    const isReplyToBot = msg.reply_to_message?.from?.id === botUserId;
-    const hasOwnerMention = containsOwnerMention(msg, config.ownerUsername, config.ownerUserId);
-    if (!hasOwnerMention && !isReplyToBot) return;
+    const repliedToUserId = msg.reply_to_message?.from?.id || null;
+    const isReplyToBot = repliedToUserId === botUserId;
+    const isReplyToOwner = repliedToUserId === config.ownerUserId;
+    const hasOwnerMention = containsOwnerMention(
+      msg,
+      config.ownerUsername,
+      config.ownerUserId,
+      effectiveBotUsername,
+      botUserId
+    );
+    if (!hasOwnerMention && !isReplyToBot && !isReplyToOwner) return;
 
-    const cleanedText = hasOwnerMention ? stripOwnerMention(text, config.ownerUsername) : text.trim();
+    const cleanedText = hasOwnerMention
+      ? stripOwnerMention(text, config.ownerUsername, effectiveBotUsername)
+      : text.trim();
     await memoryService.touchUser(msg.from, msg.chat);
 
     if (
       isContactRequestIntent(cleanedText, config.ownerUsername, {
-        isReplyToBot
+        isReplyToBot,
+        isReplyToOwner
       })
     ) {
       await bot.sendMessage(msg.chat.id, "Your message has been forwarded.", {

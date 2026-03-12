@@ -20,8 +20,9 @@ export function getMessageTextAndEntities(msg) {
   return { text: "", entities: [] };
 }
 
-export function containsOwnerMention(msg, ownerUsername, ownerUserId) {
-  const targetMention = `@${ownerUsername.toLowerCase()}`;
+export function containsOwnerMention(msg, ownerUsername, ownerUserId, botUsername = null, botUserId = null) {
+  const ownerMention = `@${ownerUsername.toLowerCase()}`;
+  const botMention = botUsername ? `@${String(botUsername).toLowerCase()}` : null;
   const { text, entities } = getMessageTextAndEntities(msg);
   if (!text) return false;
 
@@ -31,20 +32,31 @@ export function containsOwnerMention(msg, ownerUsername, ownerUserId) {
         .slice(entity.offset, entity.offset + entity.length)
         .trim()
         .toLowerCase();
-      if (mentioned === targetMention) return true;
+      if (mentioned === ownerMention || (botMention && mentioned === botMention)) return true;
     }
-    if (entity.type === "text_mention" && entity.user?.id === ownerUserId) {
+    if (
+      entity.type === "text_mention" &&
+      (entity.user?.id === ownerUserId || (botUserId && entity.user?.id === botUserId))
+    ) {
       return true;
     }
   }
 
-  const mentionRegex = new RegExp(`(^|\\s)${escapeRegex(targetMention)}\\b`, "i");
-  return mentionRegex.test(text);
+  const ownerRegex = new RegExp(`(^|\\s)${escapeRegex(ownerMention)}\\b`, "i");
+  if (ownerRegex.test(text)) return true;
+  if (!botMention) return false;
+  const botRegex = new RegExp(`(^|\\s)${escapeRegex(botMention)}\\b`, "i");
+  return botRegex.test(text);
 }
 
-export function stripOwnerMention(text, ownerUsername) {
+export function stripOwnerMention(text, ownerUsername, botUsername = null) {
   if (!text) return "";
-  const regex = new RegExp(`(^|\\s)@${escapeRegex(ownerUsername)}\\b`, "ig");
+  const targets = [ownerUsername, botUsername]
+    .filter(Boolean)
+    .map((value) => String(value).replace(/^@/, ""));
+  if (!targets.length) return text.trim();
+  const escaped = targets.map((value) => escapeRegex(value)).join("|");
+  const regex = new RegExp(`(^|\\s)@(?:${escaped})\\b`, "ig");
   return text.replace(regex, " ").replace(/\s+/g, " ").trim();
 }
 

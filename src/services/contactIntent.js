@@ -7,6 +7,7 @@ export function isContactRequestIntent(text, ownerUsername, context = {}) {
   const normalized = text.trim();
   const ownerMention = `@${ownerUsername.toLowerCase()}`;
   const isReplyToBot = Boolean(context.isReplyToBot);
+  const isReplyToOwner = Boolean(context.isReplyToOwner);
 
   const patterns = [
     /\b(?:tell|ask|notify|inform|ping)\b.{0,40}\b(?:boss|owner|admin)\b.{0,30}\b(?:message|dm|contact|reach)\b/i,
@@ -28,7 +29,7 @@ export function isContactRequestIntent(text, ownerUsername, context = {}) {
   if (ownerMessageRegex.test(normalized)) return true;
 
   if (
-    isReplyToBot &&
+    (isReplyToBot || isReplyToOwner) &&
     /\b(?:msg|message|dm|contact|reach)\s+me\b/i.test(normalized) &&
     /\b(?:tell|ask|can|could|please|u|you|him|her|them)\b/i.test(normalized)
   ) {

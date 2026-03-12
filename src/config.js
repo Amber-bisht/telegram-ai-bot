@@ -50,6 +50,7 @@ function toStringList(value, key) {
 }
 
 const ownerUsername = requiredEnv("OWNER_USERNAME").replace(/^@/, "").toLowerCase();
+const botUsername = process.env.BOT_USERNAME?.trim().replace(/^@/, "").toLowerCase() || null;
 const ownerUserId = toNumber(requiredEnv("OWNER_USER_ID"), "OWNER_USER_ID");
 const ownerChatIdEnv = process.env.OWNER_CHAT_ID?.trim();
 const groqApiKeysRaw = process.env.GROQ_API_KEYS?.trim();
@@ -62,6 +63,7 @@ export const config = {
   assistantName: process.env.ASSISTANT_NAME?.trim() || "Makima",
   ownerName: requiredEnv("OWNER_NAME"),
   ownerUsername,
+  botUsername,
   ownerUserId,
   ownerChatId: ownerChatIdEnv ? toNumber(ownerChatIdEnv, "OWNER_CHAT_ID") : ownerUserId,
   authGroupIds: toNumberList(requiredEnv("AUTH_GROUP_IDS"), "AUTH_GROUP_IDS"),
