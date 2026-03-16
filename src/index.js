@@ -106,40 +106,57 @@ async function bootstrap() {
     );
   }
 
-  // CRITICAL: Reset Telegram's cached allowed_updates before starting polling.
-  // Without this, Telegram server may use old cached settings that exclude 'chat_member'.
-  {
-    const tempBot = new TelegramBot(config.telegramBotToken);
-    try {
-      await tempBot.deleteWebhook({ drop_pending_updates: false });
-      console.log("[STARTUP] Webhook cleared. Telegram will use fresh allowed_updates on next poll.");
-    } catch (e) {
-      console.warn("[STARTUP] Could not clear webhook:", e.message);
-    }
-  }
+  const ALL_ALLOWED_UPDATES = [
+    "message", "edited_message", "channel_post", "edited_channel_post",
+    "inline_query", "chosen_inline_result", "callback_query",
+    "shipping_query", "pre_checkout_query", "poll", "poll_answer",
+    "my_chat_member", "chat_member", "chat_join_request"
+  ];
 
   const bot = new TelegramBot(config.telegramBotToken, {
     polling: {
-      autoStart: true,
+      autoStart: false, // Start manually after registering allowed_updates
       interval: 300,
       params: { 
         timeout: 25,
-        allowed_updates: ["message", "edited_message", "channel_post", "edited_channel_post", "inline_query", "chosen_inline_result", "callback_query", "shipping_query", "pre_checkout_query", "poll", "poll_answer", "my_chat_member", "chat_member", "chat_join_request"]
+        allowed_updates: ALL_ALLOWED_UPDATES
       }
     }
   });
+  // IMPORTANT: Telegram requires allowed_updates to be a JSON-encoded array in form data.
+  // The library sends it as-is, which may cause Telegram to silently ignore it.
+  if (Array.isArray(bot.options.polling?.params?.allowed_updates)) {
+    bot.options.polling.params.allowed_updates = JSON.stringify(bot.options.polling.params.allowed_updates);
+  }
+
+  // Monkey-patch processUpdate to log ALL raw updates (especially non-message ones)
+  const originalProcessUpdate = bot.processUpdate.bind(bot);
+  bot.processUpdate = function(update) {
+    const keys = Object.keys(update).filter(k => k !== 'update_id');
+    const type = keys[0] || 'unknown';
+    if (type !== 'message') {
+      console.log(`[RAW UPDATE] Type: ${type}, ID: ${update.update_id}, Keys: ${keys.join(', ')}`);
+    }
+    return originalProcessUpdate(update);
+  };
+
+  // Force-register with JSON-stringified allowed_updates, then start polling
+  try {
+    await bot.getUpdates({ timeout: 0, offset: -1, allowed_updates: JSON.stringify(ALL_ALLOWED_UPDATES) });
+    console.log("[STARTUP] Successfully registered chat_member in allowed_updates with Telegram.");
+  } catch (e) {
+    console.warn("[STARTUP] Could not pre-register allowed_updates:", e.message);
+  }
+
+  await bot.startPolling();
+  console.log("[STARTUP] Polling started with chat_member updates enabled.");
 
   bot.on("polling_error", (err) => {
-    console.error(`[DEBUG] Polling Error: ${err.message}`, err);
+    console.error(`[POLLING ERROR] ${err.message}`);
   });
 
   bot.on("error", (err) => {
-    console.error(`[DEBUG] Bot Error: ${err.message}`, err);
-  });
-
-  bot.on("update", (update) => {
-    const type = Object.keys(update).find(k => k !== "update_id");
-    console.log(`[DEBUG] RAW UPDATE RECEIVED: ${type} (ID: ${update.update_id})`);
+    console.error(`[BOT ERROR] ${err.message}`);
   });
 
   const botProfile = await bot.getMe();
@@ -651,13 +668,7 @@ async function bootstrap() {
 
   bot.on("message", async (msg) => {
     try {
-      console.log(`[DEBUG] Received message event. Type: ${msg.chat?.type}, Chat ID: ${msg.chat?.id}, From: ${msg.from?.id}`);
-      
-      if (!msg.text) {
-        console.log(`[DEBUG] Received non-text message. Keys: ${Object.keys(msg).join(", ")}`);
-      }
-      
-      // 1. Aggressive check for join events inside general message hook
+      // Check for join events
       if (msg.new_chat_members) {
         console.log(`[DEBUG] Message event contains ${msg.new_chat_members.length} new_chat_members for chat ID: ${msg.chat.id}`);
         if (!authorizedGroups.has(String(msg.chat.id))) {
@@ -665,6 +676,11 @@ async function bootstrap() {
           return;
         }
         const rules = await memoryService.getGroupRules(msg.chat.id);
+        if (rules) {
+          console.log(`[DEBUG] Rules for chat ${msg.chat.id}: rulesText length=${rules.rulesText?.length ?? 0}, buttons=${rules.rulesButtons?.length ?? 0}`);
+        } else {
+          console.log(`[DEBUG] Rules for chat ${msg.chat.id}: NULL - no rules saved in DB`);
+        }
         if (rules && rules.rulesText) {
           for (const member of msg.new_chat_members) {
             if (member.is_bot) continue;
@@ -691,13 +707,11 @@ async function bootstrap() {
 
       if (!msg?.from || msg.from.is_bot) return;
       if (isPrivateChat(msg.chat.type)) {
-        console.log(`[DEBUG] Processing private message from ${msg.from.id}`);
         await handlePrivateMessage(msg);
         return;
       }
       if (isGroupChat(msg.chat.type)) {
         if (!authorizedGroups.has(String(msg.chat.id))) {
-          // Log only once per group to avoid spam, but we need to know if we're seeing it
           return;
         }
         await handleGroupMessage(msg);
@@ -708,66 +722,48 @@ async function bootstrap() {
   });
 
   bot.on("my_chat_member", (msg) => {
-    console.log(`[DEBUG] my_chat_member event: Bot status in ${msg.chat.id} changed to ${msg.new_chat_member.status}`);
+    console.log(`[BOOTSTRAP] Bot status in ${msg.chat.id} (${msg.chat.title || "?"}) changed: ${msg.old_chat_member?.status} -> ${msg.new_chat_member?.status}`);
   });
 
-  bot.on("chat_join_request", (msg) => {
-    console.log(`[DEBUG] chat_join_request from ${msg.from.id} in ${msg.chat.id}`);
-  });
-
-  bot.on("new_chat_members", (msg) => {
-    console.log(`[DEBUG] Legacy new_chat_members event fired for chat ${msg.chat.id}`);
-  });
-
-  // 2. Dedicated chat_member event hook
+  // Listen for member join/leave events — works for large supergroups
   bot.on("chat_member", async (msg) => {
     try {
+      if (!authorizedGroups.has(String(msg.chat.id))) return;
+
       const newStatus = msg.new_chat_member?.status;
       const oldStatus = msg.old_chat_member?.status;
-      const memberId = msg.new_chat_member?.user?.id;
+      const member = msg.new_chat_member?.user;
+      if (!member || member.is_bot) return;
 
-      console.log(`[DEBUG] chat_member event: User ${memberId} in Chat ${msg.chat?.id} changed: ${oldStatus} -> ${newStatus}`);
-      
-      if (!authorizedGroups.has(String(msg.chat.id))) {
-        return;
-      }
-      
-      // Log transition again with specialized wording for debugging
-      console.log(`[DEBUG] Member ${memberId} transition in authorized chat: ${oldStatus} -> ${newStatus}`);
+      // Fire when someone transitions into the group (from left/kicked/nothing)
+      const isNewJoin =
+        (newStatus === "member" || newStatus === "restricted") &&
+        oldStatus !== "member" && oldStatus !== "restricted" &&
+        oldStatus !== "administrator" && oldStatus !== "creator";
 
-      // A user joined if they transitioned to member/restricted from anything else
-      const isNewJoin = 
-        (newStatus === "member" || newStatus === "restricted") && 
-        (oldStatus !== "member" && oldStatus !== "restricted" && oldStatus !== "administrator" && oldStatus !== "creator");
-        
-      if (!isNewJoin) {
-         console.log("[DEBUG] Skipping: Not a fresh join event.");
-         return;
-      }
+      if (!isNewJoin) return;
 
-      const member = msg.new_chat_member.user;
-      if (member.is_bot) return;
+      console.log(`[JOIN] chat_member join detected: user ${member.id} in chat ${msg.chat.id}`);
 
       const rules = await memoryService.getGroupRules(msg.chat.id);
-      
-      if (rules && rules.rulesText) {
-          let welcomeText = rules.rulesText
-            .replace(/\{name\}/ig, member.first_name || "")
-            .replace(/\{username\}/ig, member.username ? (member.username.startsWith("@") ? member.username : `@${member.username}`) : "");
-          
-          welcomeText = welcomeText.replace(/@@/g, "@");
-            
-          const options = {};
-          if (rules.rulesButtons && rules.rulesButtons.length > 0) {
-            options.reply_markup = {
-               inline_keyboard: [
-                 rules.rulesButtons.map(btn => ({ text: btn.text, url: btn.url }))
-               ]
-            };
-          }
-          await bot.sendMessage(msg.chat.id, welcomeText, options).catch(console.error);
-          console.log("[DEBUG] Welcome sent via chat_member to", member.id);
+      if (!rules?.rulesText) {
+        console.log(`[JOIN] No rules set for chat ${msg.chat.id}`);
+        return;
       }
+
+      let welcomeText = rules.rulesText
+        .replace(/\{name\}/ig, member.first_name || "")
+        .replace(/\{username\}/ig, member.username ? `@${member.username}` : "");
+      welcomeText = welcomeText.replace(/@@/g, "@");
+
+      const options = {};
+      if (rules.rulesButtons?.length > 0) {
+        options.reply_markup = {
+          inline_keyboard: [rules.rulesButtons.map(btn => ({ text: btn.text, url: btn.url }))]
+        };
+      }
+      await bot.sendMessage(msg.chat.id, welcomeText, options).catch(console.error);
+      console.log(`[JOIN] Welcome sent via chat_member to user ${member.id}`);
     } catch (err) {
       console.error("chat_member event error:", err.message);
     }
