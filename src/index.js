@@ -112,9 +112,18 @@ async function bootstrap() {
       interval: 300,
       params: { 
         timeout: 25,
-        allowed_updates: ["message", "edited_message", "channel_post", "edited_channel_post", "inline_query", "chosen_inline_result", "callback_query", "shipping_query", "pre_checkout_query", "poll", "poll_answer", "my_chat_member", "chat_member", "chat_join_request"]
+        allowed_updates: ["message", "edited_message", "channel_post", "edited_channel_post", "inline_query", "chosen_inline_result", "callback_query", "shipping_query", "pre_checkout_query", "poll", "poll_answer", "my_chat_member", "chat_member", "chat_join_request"],
+        allowedUpdates: ["message", "edited_message", "channel_post", "edited_channel_post", "inline_query", "chosen_inline_result", "callback_query", "shipping_query", "pre_checkout_query", "poll", "poll_answer", "my_chat_member", "chat_member", "chat_join_request"]
       }
     }
+  });
+
+  bot.on("polling_error", (err) => {
+    console.error(`[DEBUG] Polling Error: ${err.message}`, err);
+  });
+
+  bot.on("error", (err) => {
+    console.error(`[DEBUG] Bot Error: ${err.message}`, err);
   });
   const botProfile = await bot.getMe();
   const botUserId = botProfile.id;
@@ -588,6 +597,10 @@ async function bootstrap() {
     try {
       console.log(`[DEBUG] Received message event. Type: ${msg.chat?.type}, Chat ID: ${msg.chat?.id}, From: ${msg.from?.id}`);
       
+      if (!msg.text) {
+        console.log(`[DEBUG] Received non-text message. Keys: ${Object.keys(msg).join(", ")}`);
+      }
+      
       // 1. Aggressive check for join events inside general message hook
       if (msg.new_chat_members) {
         console.log(`[DEBUG] Message event contains ${msg.new_chat_members.length} new_chat_members for chat ID: ${msg.chat.id}`);
@@ -640,6 +653,14 @@ async function bootstrap() {
 
   bot.on("my_chat_member", (msg) => {
     console.log(`[DEBUG] my_chat_member event: Bot status in ${msg.chat.id} changed to ${msg.new_chat_member.status}`);
+  });
+
+  bot.on("chat_join_request", (msg) => {
+    console.log(`[DEBUG] chat_join_request from ${msg.from.id} in ${msg.chat.id}`);
+  });
+
+  bot.on("new_chat_members", (msg) => {
+    console.log(`[DEBUG] Legacy new_chat_members event fired for chat ${msg.chat.id}`);
   });
 
   // 2. Dedicated chat_member event hook
