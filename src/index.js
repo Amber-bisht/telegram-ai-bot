@@ -422,38 +422,6 @@ async function bootstrap() {
       return;
     }
 
-    if (msg.new_chat_members) {
-      console.log("[DEBUG] Received new_chat_members event for chat:", msg.chat.id, "Members:", msg.new_chat_members.map(m => m.id));
-      try {
-        const rules = await memoryService.getGroupRules(msg.chat.id);
-        if (rules && rules.rulesText) {
-          console.log("[DEBUG] Found rules for chat, triggering welcome...");
-          for (const member of msg.new_chat_members) {
-            if (member.is_bot) continue;
-            let welcomeText = rules.rulesText
-              .replace(/\{name\}/ig, member.first_name || "")
-              .replace(/\{username\}/ig, member.username ? `@${member.username}` : "");
-              
-            const options = {};
-            if (rules.rulesButtons && rules.rulesButtons.length > 0) {
-              options.reply_markup = {
-                 inline_keyboard: [
-                   rules.rulesButtons.map(btn => ({ text: btn.text, url: btn.url }))
-                 ]
-              };
-            }
-            await bot.sendMessage(msg.chat.id, welcomeText, options);
-            console.log("[DEBUG] Welcome message sent to", member.id);
-          }
-        } else {
-          console.log("[DEBUG] No rules found for chat", msg.chat.id);
-        }
-      } catch (err) {
-        console.error("Welcome message error:", err.message);
-      }
-      return;
-    }
-
     const { text } = getMessageTextAndEntities(msg);
     if (!text || !text.trim()) return;
 
@@ -597,13 +565,6 @@ async function bootstrap() {
 
   bot.on("message", async (msg) => {
     try {
-      if (msg.new_chat_members) {
-        console.log("[DEBUG] Root message handler caught new_chat_members event.", msg.chat.id);
-      }
-      if (msg.new_chat_members && isGroupChat(msg.chat.type)) {
-         await handleGroupMessage(msg);
-         return;
-      }
       if (!msg?.from || msg.from.is_bot) return;
       if (isPrivateChat(msg.chat.type)) {
         await handlePrivateMessage(msg);
@@ -614,6 +575,36 @@ async function bootstrap() {
       }
     } catch (error) {
       console.error("Message handler failed:", error);
+    }
+  });
+
+  bot.on("new_chat_members", async (msg) => {
+    if (!authorizedGroups.has(String(msg.chat.id))) return;
+    try {
+      console.log("[DEBUG] Dedicated new_chat_members listener fired for chat:", msg.chat.id);
+      const rules = await memoryService.getGroupRules(msg.chat.id);
+      
+      if (rules && rules.rulesText) {
+        for (const member of msg.new_chat_members) {
+          if (member.is_bot) continue;
+          let welcomeText = rules.rulesText
+            .replace(/\{name\}/ig, member.first_name || "")
+            .replace(/\{username\}/ig, member.username ? `@${member.username}` : "");
+            
+          const options = {};
+          if (rules.rulesButtons && rules.rulesButtons.length > 0) {
+            options.reply_markup = {
+               inline_keyboard: [
+                 rules.rulesButtons.map(btn => ({ text: btn.text, url: btn.url }))
+               ]
+            };
+          }
+          await bot.sendMessage(msg.chat.id, welcomeText, options);
+          console.log("[DEBUG] Welcome message sent to", member.id);
+        }
+      }
+    } catch (err) {
+      console.error("new_chat_members event error:", err.message);
     }
   });
 
