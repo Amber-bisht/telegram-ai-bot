@@ -417,8 +417,97 @@ async function bootstrap() {
   async function handleGroupMessage(msg) {
     if (!authorizedGroups.has(String(msg.chat.id))) return;
 
+    if (msg.new_chat_members) {
+      try {
+        const rules = await memoryService.getGroupRules(msg.chat.id);
+        if (rules && rules.rulesText) {
+          for (const member of msg.new_chat_members) {
+            if (member.is_bot) continue;
+            let welcomeText = rules.rulesText
+              .replace(/\{name\}/ig, member.first_name || "")
+              .replace(/\{username\}/ig, member.username ? `@${member.username}` : "");
+              
+            const options = {};
+            if (rules.rulesButtons && rules.rulesButtons.length > 0) {
+              options.reply_markup = {
+                 inline_keyboard: [
+                   rules.rulesButtons.map(btn => ({ text: btn.text, url: btn.url }))
+                 ]
+              };
+            }
+            await bot.sendMessage(msg.chat.id, welcomeText, options);
+          }
+        }
+      } catch (err) {
+        console.error("Welcome message error:", err.message);
+      }
+      return;
+    }
+
     const { text } = getMessageTextAndEntities(msg);
     if (!text || !text.trim()) return;
+
+    const command = toCommand(text);
+    if (["/rules", "/ban", "/fban"].includes(command)) {
+       try {
+         const chatAdmins = await bot.getChatAdministrators(msg.chat.id);
+         const isAdminOrOwner = msg.from.id === config.ownerUserId || chatAdmins.some(admin => admin.user.id === msg.from.id);
+         
+         if (isAdminOrOwner) {
+            if (command === "/rules" && msg.from.id === config.ownerUserId) {
+               const rulesContent = text.substring(text.indexOf(" ") + 1).trim();
+               if (!rulesContent || command === text.trim()) {
+                 await bot.sendMessage(msg.chat.id, "Usage: /rules <welcome text> | <btn1 name> - <btn1 url> | <btn2 name> - <btn2 url>\nUse {name} and {username} in text.");
+                 return;
+               }
+               const parts = rulesContent.split("|").map(p => p.trim());
+               const rulesText = parts[0];
+               const buttons = [];
+               for (let i = 1; i < parts.length; i++) {
+                  const btnParts = parts[i].split("-").map(p => p.trim());
+                  if (btnParts.length >= 2) {
+                     buttons.push({ text: btnParts[0], url: btnParts.slice(1).join("-") });
+                  }
+               }
+               await memoryService.setGroupRules(msg.chat.id, rulesText, buttons);
+               await bot.sendMessage(msg.chat.id, "Group rules and welcome message updated.");
+               return;
+            }
+
+            if (command === "/ban") {
+               const targetUser = msg.reply_to_message?.from;
+               if (!targetUser) {
+                 await bot.sendMessage(msg.chat.id, "Reply to a user to /ban them.");
+                 return;
+               }
+               await bot.banChatMember(msg.chat.id, targetUser.id);
+               await bot.sendMessage(msg.chat.id, `User ${displayName(targetUser)} has been banned from this group.`);
+               return;
+            }
+
+            if (command === "/fban") {
+               const targetUser = msg.reply_to_message?.from;
+               if (!targetUser) {
+                 await bot.sendMessage(msg.chat.id, "Reply to a user to /fban them.");
+                 return;
+               }
+               let bannedCount = 0;
+               for (const gid of config.authGroupIds) {
+                 try {
+                   await bot.banChatMember(gid, targetUser.id);
+                   bannedCount++;
+                 } catch (err) {
+                   // ignore errors if bot can't ban in some groups
+                 }
+               }
+               await bot.sendMessage(msg.chat.id, `User ${displayName(targetUser)} has been forcefully banned from ${bannedCount} authorized group(s).`);
+               return;
+            }
+         }
+       } catch (err) {
+         console.error("Admin command error:", err.message);
+       }
+    }
 
     const ignoredUserIds = await memoryService.getIgnoredUserIds(config.ownerUserId);
     if (ignoredUserIds.includes(msg.from.id)) return;
@@ -498,6 +587,10 @@ async function bootstrap() {
 
   bot.on("message", async (msg) => {
     try {
+      if (msg.new_chat_members && isGroupChat(msg.chat.type)) {
+         await handleGroupMessage(msg);
+         return;
+      }
       if (!msg?.from || msg.from.is_bot) return;
       if (isPrivateChat(msg.chat.type)) {
         await handlePrivateMessage(msg);

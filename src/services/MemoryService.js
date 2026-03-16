@@ -2,6 +2,7 @@ import ContactRequest from "../models/ContactRequest.js";
 import OwnerFeed from "../models/OwnerFeed.js";
 import UserMemory from "../models/UserMemory.js";
 import GroupMemory from "../models/GroupMemory.js";
+import GroupConfig from "../models/GroupConfig.js";
 
 function compactText(value, maxLen = 220) {
   if (!value) return null;
@@ -145,6 +146,34 @@ export class MemoryService {
       return doc?.messages || [];
     } catch {
       return [];
+    }
+  }
+
+  async getGroupRules(chatId) {
+    if (!chatId) return null;
+    try {
+      const doc = await GroupConfig.findOne({ chatId }).lean();
+      return doc || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async setGroupRules(chatId, rulesText, rulesButtons = []) {
+    if (!chatId) return null;
+    try {
+      const updated = await GroupConfig.findOneAndUpdate(
+        { chatId },
+        {
+          $setOnInsert: { chatId },
+          $set: { rulesText, rulesButtons }
+        },
+        { upsert: true, new: true, lean: true }
+      );
+      return updated;
+    } catch (err) {
+      console.error("Failed to set group rules:", err.message);
+      return null;
     }
   }
 
