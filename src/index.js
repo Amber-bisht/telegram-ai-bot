@@ -581,12 +581,48 @@ async function bootstrap() {
 
   bot.on("message", async (msg) => {
     try {
+      console.log(`[DEBUG] Received message event. Type: ${msg.chat?.type}, Chat ID: ${msg.chat?.id}, From: ${msg.from?.id}`);
+      
+      // 1. Aggressive check for join events inside general message hook
+      if (msg.new_chat_members) {
+        console.log(`[DEBUG] Message event contains ${msg.new_chat_members.length} new_chat_members for chat ID: ${msg.chat.id}`);
+        if (!authorizedGroups.has(String(msg.chat.id))) {
+          console.log(`[DEBUG] Ignoring new_chat_members: Chat ID ${msg.chat.id} not in authorizedGroups: [${Array.from(authorizedGroups).join(", ")}]`);
+          return;
+        }
+        const rules = await memoryService.getGroupRules(msg.chat.id);
+        if (rules && rules.rulesText) {
+          for (const member of msg.new_chat_members) {
+            if (member.is_bot) continue;
+            let welcomeText = rules.rulesText
+              .replace(/\{name\}/ig, member.first_name || "")
+              .replace(/\{username\}/ig, member.username ? `@${member.username}` : "");
+              
+            const options = {};
+            if (rules.rulesButtons && rules.rulesButtons.length > 0) {
+              options.reply_markup = {
+                 inline_keyboard: [
+                   rules.rulesButtons.map(btn => ({ text: btn.text, url: btn.url }))
+                 ]
+              };
+            }
+            await bot.sendMessage(msg.chat.id, welcomeText, options).catch(console.error);
+            console.log("[DEBUG] Welcome sent via message.new_chat_members to", member.id);
+          }
+        }
+      }
+
       if (!msg?.from || msg.from.is_bot) return;
       if (isPrivateChat(msg.chat.type)) {
+        console.log(`[DEBUG] Processing private message from ${msg.from.id}`);
         await handlePrivateMessage(msg);
         return;
       }
       if (isGroupChat(msg.chat.type)) {
+        if (!authorizedGroups.has(String(msg.chat.id))) {
+          console.log(`[DEBUG] Ignoring group message: Chat ID ${msg.chat.id} not authorized.`);
+          return;
+        }
         await handleGroupMessage(msg);
       }
     } catch (error) {
@@ -594,18 +630,26 @@ async function bootstrap() {
     }
   });
 
+  // 2. Dedicated chat_member event hook
   bot.on("chat_member", async (msg) => {
-    if (!authorizedGroups.has(String(msg.chat.id))) return;
     try {
-      console.log("[DEBUG] Dedicated chat_member listener fired for chat:", msg.chat.id);
+      console.log(`[DEBUG] chat_member event received. Chat ID: ${msg.chat?.id}, From: ${msg.from?.id}`);
+      if (!authorizedGroups.has(String(msg.chat.id))) {
+        console.log(`[DEBUG] Ignoring chat_member: Chat ID ${msg.chat.id} not authorized.`);
+        return;
+      }
       
-      // A user joined if their new status is 'member' and old status was 'left' or 'kicked'
+      console.log("[DEBUG] chat_member event fired. New status:", msg.new_chat_member?.status, "Old:", msg.old_chat_member?.status);
+      
+      const newStatus = msg.new_chat_member?.status;
+      const oldStatus = msg.old_chat_member?.status;
+      
+      // A user joined if they transitioned from left/kicked to member/restricted
       const isNewJoin = 
-        msg.new_chat_member?.status === "member" && 
-        (msg.old_chat_member?.status === "left" || msg.old_chat_member?.status === "kicked");
+        (newStatus === "member" || newStatus === "restricted") && 
+        (oldStatus === "left" || oldStatus === "kicked" || !oldStatus);
         
       if (!isNewJoin) {
-         console.log("[DEBUG] Not a new join event (user might just be restricted or promoted).");
          return;
       }
 
@@ -627,8 +671,8 @@ async function bootstrap() {
                ]
             };
           }
-          await bot.sendMessage(msg.chat.id, welcomeText, options);
-          console.log("[DEBUG] Welcome message sent via chat_member to", member.id);
+          await bot.sendMessage(msg.chat.id, welcomeText, options).catch(console.error);
+          console.log("[DEBUG] Welcome sent via chat_member to", member.id);
       }
     } catch (err) {
       console.error("chat_member event error:", err.message);
