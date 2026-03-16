@@ -437,7 +437,7 @@ async function bootstrap() {
          const isAdminOrOwner = msg.from.id === config.ownerUserId || chatAdmins.some(admin => admin.user.id === msg.from.id);
          
          if (isAdminOrOwner) {
-            if (command === "/rules" && msg.from.id === config.ownerUserId) {
+            if (command === "/rules") {
                const rulesContent = text.substring(text.indexOf(" ") + 1).trim();
                if (!rulesContent || command === text.trim()) {
                  await bot.sendMessage(msg.chat.id, "Usage: /rules <welcome text> {btn1 name https://btn1.url} {btn2 name https://btn2.url}\nUse {name} and {username} in text.");
@@ -642,6 +642,8 @@ async function bootstrap() {
   bot.on("chat_member", async (msg) => {
     try {
       console.log(`[DEBUG] chat_member event received. Chat ID: ${msg.chat?.id}, From: ${msg.from?.id}`);
+      console.log(`[DEBUG] Full Event Payload: ${JSON.stringify(msg)}`);
+      
       if (!authorizedGroups.has(String(msg.chat.id))) {
         console.log(`[DEBUG] Ignoring chat_member: Chat ID ${msg.chat.id} not authorized.`);
         return;
