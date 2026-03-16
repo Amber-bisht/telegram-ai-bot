@@ -439,6 +439,7 @@ async function bootstrap() {
       ? stripOwnerMention(text, config.ownerUsername, effectiveBotUsername)
       : text.trim();
     await memoryService.touchUser(msg.from, msg.chat);
+    await memoryService.logGroupMessage(msg.chat, msg.from, cleanedText || text);
 
     if (
       isContactRequestIntent(cleanedText, config.ownerUsername, {
@@ -460,6 +461,8 @@ async function bootstrap() {
     }
 
     const userMemory = await memoryService.getUserMemory(msg.from.id);
+    const groupContextRaw = await memoryService.getGroupContext(msg.chat.id);
+    const groupContext = groupContextRaw.map((m) => `[${m.name}]: ${m.text}`).join("\n");
     const ownerFeedNotes = await memoryService.getOwnerFeed(config.ownerUserId);
     const latestOwnerFeedNote = ownerFeedNotes.at(-1) || null;
     const ownerKnowledgeNotes = await memoryService.getOwnerKnowledge(config.ownerUserId);
@@ -477,6 +480,7 @@ async function bootstrap() {
       sarcasmMode: Math.random() < 0.5 ? "sarcastic" : "neutral",
       messageText: cleanedText || text,
       userMemory,
+      groupContext,
       fromName: displayName(msg.from)
     });
 

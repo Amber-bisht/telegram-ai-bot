@@ -1,6 +1,7 @@
 import ContactRequest from "../models/ContactRequest.js";
 import OwnerFeed from "../models/OwnerFeed.js";
 import UserMemory from "../models/UserMemory.js";
+import GroupMemory from "../models/GroupMemory.js";
 
 function compactText(value, maxLen = 220) {
   if (!value) return null;
@@ -108,6 +109,43 @@ export class MemoryService {
 
     this.cache.set(user.id, doc);
     return doc;
+  }
+
+  async logGroupMessage(chat, user, text) {
+    if (!chat || !user || !text) return;
+    const msgData = {
+      userId: user.id,
+      name: user.first_name || user.username || "Unknown",
+      text: compactText(text, 500)
+    };
+
+    try {
+      await GroupMemory.findOneAndUpdate(
+        { chatId: chat.id },
+        {
+          $setOnInsert: { chatId: chat.id, chatTitle: chat.title || null },
+          $push: {
+            messages: {
+              $each: [msgData],
+              $slice: -20 // keep last 20 messages
+            }
+          }
+        },
+        { upsert: true }
+      );
+    } catch (err) {
+      console.error("Failed to log group message context:", err.message);
+    }
+  }
+
+  async getGroupContext(chatId) {
+    if (!chatId) return [];
+    try {
+      const doc = await GroupMemory.findOne({ chatId }).lean();
+      return doc?.messages || [];
+    } catch {
+      return [];
+    }
   }
 
   async getUserMemory(userId) {

@@ -143,6 +143,7 @@ export class GroqService {
     sarcasmMode,
     messageText,
     userMemory,
+    groupContext,
     fromName
   }) {
     const memoryContext = {
@@ -162,18 +163,19 @@ export class GroqService {
           {
             role: "system",
             content: [
-              `You are ${assistantName}, assistant to ${ownerName}.`,
-              `The owner username is @${ownerUsername}.`,
-              `Write replies as if they are directly from ${ownerName} in first person.`,
+              `You are ${ownerName}. You are participating in a Telegram group chat.`,
+              `Your username is @${ownerUsername}.`,
+              `Write replies in the first person as ${ownerName}. Do NOT act as an assistant or proxy.`,
               "Never mention being a bot, AI, assistant, automation, or system.",
-              "Keep responses concise and useful (1-4 short sentences).",
-              "Owner /feed memory is the highest-priority source for owner status, availability, and instructions.",
-              "If asked about owner availability/status, use the latest relevant owner /feed memory and answer directly.",
-              "Do not claim uncertainty when owner /feed memory provides relevant context.",
+              "Keep responses concise, conversational, and direct (1-4 short sentences).",
+              "You have been provided 'Shared owner knowledge' and 'Owner feed memory'.",
+              "1. Owner /feed memory dictates your current status, availability, and instructions.",
+              "2. Shared owner knowledge represents factual ground truth. If it contradicts your pre-trained AI knowledge, YOU MUST ABSOLUTELY TRUST AND USE THE PROVIDED KNOWLEDGE. It overrides all other information.",
+              "Do not claim uncertainty when your provided memory or knowledge gives you the answer.",
               sarcasmMode === "sarcastic"
-                ? "Use a mildly sarcastic tone in this reply while still being helpful and respectful."
-                : "Use a straightforward, non-sarcastic tone in this reply.",
-              "Use known user context and owner feed instructions only when relevant."
+                ? "Use a mildly sarcastic tone while still being helpful."
+                : "Use a straightforward, non-sarcastic conversational tone.",
+              "Provide answers smoothly without explicitly saying 'According to my memory' or 'My knowledge notes say'."
             ].join(" ")
           },
           {
@@ -182,8 +184,9 @@ export class GroqService {
               `Current datetime: ${currentDateTime || new Date().toISOString()}`,
               `Group: ${groupTitle || "Unknown Group"}`,
               `User: ${fromName || "Unknown"}`,
-              `Incoming message: ${messageText}`,
-              `Known user memory: ${JSON.stringify(memoryContext)}`,
+              `Recent Group Context:\n${groupContext || "None"}`,
+              `Incoming message from user: ${messageText}`,
+              `Known user memory for this specific user: ${JSON.stringify(memoryContext)}`,
               `Owner feed memory: ${JSON.stringify((ownerFeedNotes || []).slice(-25))}`,
               `Latest owner feed note: ${latestOwnerFeedNote || "None"}`,
               `Shared owner knowledge (/text): ${JSON.stringify((ownerKnowledgeNotes || []).slice(-80))}`,
