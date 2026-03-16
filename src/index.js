@@ -125,6 +125,12 @@ async function bootstrap() {
   bot.on("error", (err) => {
     console.error(`[DEBUG] Bot Error: ${err.message}`, err);
   });
+
+  bot.on("update", (update) => {
+    const type = Object.keys(update).find(k => k !== "update_id");
+    console.log(`[DEBUG] RAW UPDATE RECEIVED: ${type} (ID: ${update.update_id})`);
+  });
+
   const botProfile = await bot.getMe();
   const botUserId = botProfile.id;
   const effectiveBotUsername =
@@ -454,6 +460,31 @@ async function bootstrap() {
            
            await bot.sendMessage(msg.chat.id, status, { parse_mode: "Markdown" });
            return;
+         }
+
+         if (command === "/test_welcome") {
+            const rules = await memoryService.getGroupRules(msg.chat.id);
+            if (!rules || !rules.rulesText) {
+              await bot.sendMessage(msg.chat.id, "No rules set for this group.");
+              return;
+            }
+            const member = msg.from;
+            let welcomeText = rules.rulesText
+              .replace(/\{name\}/ig, member.first_name || "")
+              .replace(/\{username\}/ig, member.username ? (member.username.startsWith("@") ? member.username : `@${member.username}`) : "");
+            
+            welcomeText = welcomeText.replace(/@@/g, "@");
+            
+            const options = {};
+            if (rules.rulesButtons && rules.rulesButtons.length > 0) {
+              options.reply_markup = {
+                 inline_keyboard: [
+                   rules.rulesButtons.map(btn => ({ text: btn.text, url: btn.url }))
+                 ]
+              };
+            }
+            await bot.sendMessage(msg.chat.id, welcomeText, options);
+            return;
          }
          
          const chatAdmins = await bot.getChatAdministrators(msg.chat.id);
