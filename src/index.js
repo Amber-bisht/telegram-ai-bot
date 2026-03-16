@@ -435,18 +435,34 @@ async function bootstrap() {
             if (command === "/rules" && msg.from.id === config.ownerUserId) {
                const rulesContent = text.substring(text.indexOf(" ") + 1).trim();
                if (!rulesContent || command === text.trim()) {
-                 await bot.sendMessage(msg.chat.id, "Usage: /rules <welcome text> | <btn1 name> - <btn1 url> | <btn2 name> - <btn2 url>\nUse {name} and {username} in text.");
+                 await bot.sendMessage(msg.chat.id, "Usage: /rules <welcome text> {btn1 name https://btn1.url} {btn2 name https://btn2.url}\nUse {name} and {username} in text.");
                  return;
                }
-               const parts = rulesContent.split("|").map(p => p.trim());
-               const rulesText = parts[0];
+               
+               // Match everything inside { } as buttons, but ignore {name} and {username}
+               const buttonRegex = /\{([^}]+)\}/g;
                const buttons = [];
-               for (let i = 1; i < parts.length; i++) {
-                  const btnParts = parts[i].split("-").map(p => p.trim());
-                  if (btnParts.length >= 2) {
-                     buttons.push({ text: btnParts[0], url: btnParts.slice(1).join("-") });
-                  }
+               let match;
+               let cleanText = rulesContent;
+               
+               while ((match = buttonRegex.exec(rulesContent)) !== null) {
+                 const inner = match[1].trim();
+                 if (inner.toLowerCase() === "name" || inner.toLowerCase() === "username") continue;
+                 
+                 // Split by last space (assuming URL has no spaces)
+                 const lastSpaceIdx = inner.lastIndexOf(" ");
+                 if (lastSpaceIdx > 0) {
+                   const btnText = inner.substring(0, lastSpaceIdx).trim();
+                   const btnUrl = inner.substring(lastSpaceIdx + 1).trim();
+                   if (btnUrl.startsWith("http")) {
+                     buttons.push({ text: btnText, url: btnUrl });
+                     // remove this button definition from the text
+                     cleanText = cleanText.replace(match[0], "");
+                   }
+                 }
                }
+               
+               const rulesText = cleanText.trim();
                await memoryService.setGroupRules(msg.chat.id, rulesText, buttons);
                await bot.sendMessage(msg.chat.id, "Group rules and welcome message updated.");
                return;
@@ -578,15 +594,27 @@ async function bootstrap() {
     }
   });
 
-  bot.on("new_chat_members", async (msg) => {
+  bot.on("chat_member", async (msg) => {
     if (!authorizedGroups.has(String(msg.chat.id))) return;
     try {
-      console.log("[DEBUG] Dedicated new_chat_members listener fired for chat:", msg.chat.id);
+      console.log("[DEBUG] Dedicated chat_member listener fired for chat:", msg.chat.id);
+      
+      // A user joined if their new status is 'member' and old status was 'left' or 'kicked'
+      const isNewJoin = 
+        msg.new_chat_member?.status === "member" && 
+        (msg.old_chat_member?.status === "left" || msg.old_chat_member?.status === "kicked");
+        
+      if (!isNewJoin) {
+         console.log("[DEBUG] Not a new join event (user might just be restricted or promoted).");
+         return;
+      }
+
+      const member = msg.new_chat_member.user;
+      if (member.is_bot) return;
+
       const rules = await memoryService.getGroupRules(msg.chat.id);
       
       if (rules && rules.rulesText) {
-        for (const member of msg.new_chat_members) {
-          if (member.is_bot) continue;
           let welcomeText = rules.rulesText
             .replace(/\{name\}/ig, member.first_name || "")
             .replace(/\{username\}/ig, member.username ? `@${member.username}` : "");
@@ -600,11 +628,10 @@ async function bootstrap() {
             };
           }
           await bot.sendMessage(msg.chat.id, welcomeText, options);
-          console.log("[DEBUG] Welcome message sent to", member.id);
-        }
+          console.log("[DEBUG] Welcome message sent via chat_member to", member.id);
       }
     } catch (err) {
-      console.error("new_chat_members event error:", err.message);
+      console.error("chat_member event error:", err.message);
     }
   });
 
