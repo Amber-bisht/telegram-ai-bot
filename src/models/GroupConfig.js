@@ -12,7 +12,8 @@ const GroupConfigSchema = new mongoose.Schema(
   {
     chatId: { type: Number, required: true, unique: true, index: true },
     rulesText: { type: String, default: null },
-    rulesButtons: { type: [ButtonSchema], default: [] }
+    rulesButtons: { type: [ButtonSchema], default: [] },
+    lastWelcomeId: { type: Number, default: null }
   },
   { timestamps: true }
 );

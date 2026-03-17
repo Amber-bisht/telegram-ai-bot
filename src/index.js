@@ -164,6 +164,52 @@ async function bootstrap() {
   const effectiveBotUsername =
     (config.botUsername || botProfile.username || "").replace(/^@/, "").toLowerCase() || null;
 
+  // --- Helper: Send Welcome Message with Single-Message Cleanup ---
+  async function sendWelcome(chatId, members) {
+    try {
+      if (!members || members.length === 0) return;
+      const rules = await memoryService.getGroupRules(chatId);
+      if (!rules || !rules.rulesText) return;
+
+      // Delete old welcome if it exists
+      if (rules.lastWelcomeId) {
+        try {
+          await bot.deleteMessage(chatId, rules.lastWelcomeId).catch(() => {});
+        } catch (e) {}
+      }
+
+      // Format names and usernames for potential multiple joins
+      const names = members.map(m => m.first_name || "New Member").join(", ");
+      const usernames = members.map(m => m.username ? `@${m.username}` : "").filter(Boolean).join(", ");
+      
+      let welcomeText = rules.rulesText
+        .replace(/\{name\}/ig, names)
+        .replace(/\{username\}/ig, usernames || names);
+      
+      welcomeText = welcomeText.replace(/@@/g, "@");
+
+      const options = { parse_mode: "Markdown" };
+      if (rules.rulesButtons?.length > 0) {
+        options.reply_markup = {
+          inline_keyboard: [rules.rulesButtons.map(btn => ({ text: btn.text, url: btn.url }))]
+        };
+      }
+
+      const sent = await bot.sendMessage(chatId, welcomeText, options).catch(err => {
+        // If Markdown fails, retry with plain text
+        return bot.sendMessage(chatId, welcomeText, {
+          reply_markup: options.reply_markup
+        });
+      });
+
+      if (sent) {
+        await memoryService.setLastWelcomeId(chatId, sent.message_id);
+      }
+    } catch (err) {
+      console.error("sendWelcome error:", err.message);
+    }
+  }
+
   let pollingRestartTimer = null;
   async function schedulePollingRestart(delayMs = 5000) {
     if (pollingRestartTimer) return;
@@ -622,7 +668,7 @@ async function bootstrap() {
                  return;
                }
                await bot.restrictChatMember(msg.chat.id, targetUser.id, {
-                 permissions: {
+                 permissions: JSON.stringify({
                    can_send_messages: false,
                    can_send_media_messages: false,
                    can_send_polls: false,
@@ -631,7 +677,7 @@ async function bootstrap() {
                    can_change_info: false,
                    can_invite_users: false,
                    can_pin_messages: false
-                 }
+                 })
                });
                await bot.sendMessage(msg.chat.id, `User ${displayName(targetUser)} has been muted in this group.`);
                return;
@@ -644,14 +690,16 @@ async function bootstrap() {
                  return;
                }
                await bot.restrictChatMember(msg.chat.id, targetUser.id, {
-                 permissions: {
+                 permissions: JSON.stringify({
                    can_send_messages: true,
                    can_send_media_messages: true,
                    can_send_polls: true,
                    can_send_other_messages: true,
                    can_add_web_page_previews: true,
-                   can_invite_users: true
-                 }
+                   can_invite_users: true,
+                   can_change_info: true,
+                   can_pin_messages: true
+                 })
                });
                await bot.sendMessage(msg.chat.id, `User ${displayName(targetUser)} has been unmuted in this group.`);
                return;
@@ -741,41 +789,12 @@ async function bootstrap() {
   bot.on("message", async (msg) => {
     try {
       // Check for join events
-      if (msg.new_chat_members) {
-        console.log(`[DEBUG] Message event contains ${msg.new_chat_members.length} new_chat_members for chat ID: ${msg.chat.id}`);
-        if (!authorizedGroups.has(String(msg.chat.id))) {
-          console.log(`[DEBUG] Ignoring new_chat_members: Chat ID ${msg.chat.id} not in authorizedGroups: [${Array.from(authorizedGroups).join(", ")}]`);
-          return;
-        }
-        const rules = await memoryService.getGroupRules(msg.chat.id);
-        if (rules) {
-          console.log(`[DEBUG] Rules for chat ${msg.chat.id}: rulesText length=${rules.rulesText?.length ?? 0}, buttons=${rules.rulesButtons?.length ?? 0}`);
-        } else {
-          console.log(`[DEBUG] Rules for chat ${msg.chat.id}: NULL - no rules saved in DB`);
-        }
-        if (rules && rules.rulesText) {
-          for (const member of msg.new_chat_members) {
-            if (member.is_bot) continue;
-            let welcomeText = rules.rulesText
-              .replace(/\{name\}/ig, member.first_name || "")
-              .replace(/\{username\}/ig, member.username ? (member.username.startsWith("@") ? member.username : `@${member.username}`) : "");
-            
-            // Fix double-@ if user wrote @{username}
-            welcomeText = welcomeText.replace(/@@/g, "@");
-              
-            const options = {};
-            if (rules.rulesButtons && rules.rulesButtons.length > 0) {
-              options.reply_markup = {
-                 inline_keyboard: [
-                   rules.rulesButtons.map(btn => ({ text: btn.text, url: btn.url }))
-                 ]
-              };
-            }
-            await bot.sendMessage(msg.chat.id, welcomeText, options).catch(console.error);
-            console.log("[DEBUG] Welcome sent via message.new_chat_members to", member.id);
+        if (msg.new_chat_members) {
+          const membersToWelcome = msg.new_chat_members.filter(m => !m.is_bot);
+          if (membersToWelcome.length > 0) {
+            await sendWelcome(msg.chat.id, membersToWelcome);
           }
         }
-      }
 
       if (!msg?.from || msg.from.is_bot) return;
       if (isPrivateChat(msg.chat.type)) {
@@ -814,6 +833,8 @@ async function bootstrap() {
         oldStatus !== "administrator" && oldStatus !== "creator";
 
       if (!isNewJoin) return;
+      await sendWelcome(msg.chat.id, [member]);
+      return;
 
       console.log(`[JOIN] chat_member join detected: user ${member.id} in chat ${msg.chat.id}`);
 

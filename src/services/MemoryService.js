@@ -164,15 +164,28 @@ export class MemoryService {
     try {
       const updated = await GroupConfig.findOneAndUpdate(
         { chatId },
-        {
-          $setOnInsert: { chatId },
-          $set: { rulesText, rulesButtons }
+        { 
+          $set: { rulesText, rulesButtons } 
         },
         { upsert: true, new: true, lean: true }
       );
       return updated;
     } catch (err) {
       console.error("Failed to set group rules:", err.message);
+      return null;
+    }
+  }
+
+  async setLastWelcomeId(chatId, lastWelcomeId) {
+    if (!chatId) return null;
+    try {
+      return await GroupConfig.findOneAndUpdate(
+        { chatId },
+        { $set: { lastWelcomeId } },
+        { upsert: true, new: true, lean: true }
+      );
+    } catch (err) {
+      console.error("Failed to set last welcome ID:", err.message);
       return null;
     }
   }
