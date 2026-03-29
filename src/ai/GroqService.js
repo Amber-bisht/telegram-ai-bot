@@ -22,7 +22,7 @@ function normalizeStringArray(value) {
   return out;
 }
 
-function extractJsonObject(text) {
+export function extractJsonObject(text) {
   if (!text) return null;
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
@@ -174,6 +174,10 @@ export class GroqService {
               `Do NOT impersonate ${ownerName}.`,
               "Keep responses concise, conversational, and direct (1-4 short sentences).",
               "Do not ask too many questions to the user. Avoid ending your messages with questions unless absolutely necessary.",
+              "If the user asks for an MCQ (Multiple Choice Question) or asks you to 'generate a question' (like for exams, AWS, etc.), YOU MUST RESPOND WITH A JSON OBJECT ONLY.",
+              "The JSON object must have: { \"type\": \"poll\", \"question\": \"the question text\", \"options\": [\"opt1\", \"opt2\", \"opt3\", \"opt4\"], \"correct_option_index\": 0, \"explanation\": \"short explanation\" }.",
+              "The poll MUST be in 'quiz' mode (one correct answer).",
+              "For ALL other normal conversation messages, respond with regular text as usual.",
               "You have been provided 'Shared owner knowledge' and 'Owner feed memory'.",
               "1. Owner /feed memory dictates the owner's current status, availability, and instructions.",
               "2. Shared owner knowledge represents factual ground truth about the owner and their work.",
