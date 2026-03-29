@@ -8,6 +8,7 @@ import {
 } from "../utils/telegram.js";
 import { formatNotificationMessage } from "../utils/formatting.js";
 import { isContactRequestIntent } from "../ai/contactIntent.js";
+import { extractJsonObject } from "../ai/GroqService.js";
 
 function toCommand(text) {
   const [head] = text.trim().split(/\s+/);
@@ -201,6 +202,23 @@ async function handleGroupMessage(bot, msg, services, commandHandler, config, st
     groupContext,
     fromName: displayName(msg.from)
   });
+
+  const pollData = extractJsonObject(reply);
+  if (pollData && pollData.type === "poll" && pollData.question && Array.isArray(pollData.options)) {
+      try {
+          await bot.sendPoll(msg.chat.id, pollData.question, pollData.options, {
+              is_anonymous: false,
+              type: "quiz",
+              correct_option_index: pollData.correct_option_index || 0,
+              explanation: pollData.explanation || "",
+              reply_to_message_id: msg.message_id
+          });
+          return;
+      } catch (pollErr) {
+          console.error("Failed to send native poll:", pollErr.message);
+          // fallback to regular message
+      }
+  }
 
   await bot.sendMessage(msg.chat.id, reply, {
     reply_to_message_id: msg.message_id,
