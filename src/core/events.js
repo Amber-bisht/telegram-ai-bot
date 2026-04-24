@@ -29,17 +29,17 @@ async function sendWelcome(bot, chatId, members, { memoryService }) {
 
     if (rules.lastWelcomeId) {
       try {
-        await bot.deleteMessage(chatId, rules.lastWelcomeId).catch(() => {});
-      } catch (e) {}
+        await bot.deleteMessage(chatId, rules.lastWelcomeId).catch(() => { });
+      } catch (e) { }
     }
 
     const names = members.map(m => m.first_name || "New Member").join(", ");
     const usernames = members.map(m => m.username ? `@${m.username}` : "").filter(Boolean).join(", ");
-    
+
     let welcomeText = rules.rulesText
       .replace(/\{name\}/ig, names)
       .replace(/\{username\}/ig, usernames || names);
-    
+
     welcomeText = welcomeText.replace(/@@/g, "@");
 
     const options = { parse_mode: "Markdown" };
@@ -120,20 +120,20 @@ async function handleGroupMessage(bot, msg, services, commandHandler, config, st
   if (!text || !text.trim()) return;
 
   const command = toCommand(text);
-  
+
   if (command.startsWith('/')) {
-      const chatAdmins = await bot.getChatAdministrators(msg.chat.id).catch(() => []);
-      const isAdminOrOwner = msg.from.id === config.ownerUserId || chatAdmins.some(admin => admin.user.id === msg.from.id);
-      
-      if (isAdminOrOwner) {
-         const args = text.trim().split(/\s+/).slice(1);
-         try {
-             const handled = await commandHandler.handleAdmin(command, msg, text, args);
-             if (handled) return;
-         } catch (err) {
-             console.error("Admin command error:", err.message);
-         }
+    const chatAdmins = await bot.getChatAdministrators(msg.chat.id).catch(() => []);
+    const isAdminOrOwner = msg.from.id === config.ownerUserId || chatAdmins.some(admin => admin.user.id === msg.from.id);
+
+    if (isAdminOrOwner) {
+      const args = text.trim().split(/\s+/).slice(1);
+      try {
+        const handled = await commandHandler.handleAdmin(command, msg, text, args);
+        if (handled) return;
+      } catch (err) {
+        console.error("Admin command error:", err.message);
       }
+    }
   }
 
   const ignoredUserIds = await memoryService.getIgnoredUserIds(config.ownerUserId);
@@ -160,50 +160,64 @@ async function handleGroupMessage(bot, msg, services, commandHandler, config, st
 
   const jsonObjects = extractJsonObjects(reply);
   const polls = jsonObjects.filter(obj => obj.type === "poll" && obj.question && Array.isArray(obj.options));
-  
+
   let textToReply = reply;
   if (polls.length > 0) {
-      // Remove JSON blocks from the reply text to send the greeting/intro separately
-      for (const obj of jsonObjects) {
-          try {
-              const jsonStr = JSON.stringify(obj);
-              textToReply = textToReply.replace(jsonStr, "").trim();
-          } catch (e) {}
-      }
-      // Also try to remove any remaining braces or leftover JSON-like strings if the stringify above was slightly different
-      textToReply = textToReply.replace(/\{[\s\S]*?\}/g, "").trim();
+    // Remove JSON blocks from the reply text to send the greeting/intro separately
+    for (const obj of jsonObjects) {
+      try {
+        const jsonStr = JSON.stringify(obj);
+        textToReply = textToReply.replace(jsonStr, "").trim();
+      } catch (e) { }
+    }
+    // Also try to remove any remaining braces or leftover JSON-like strings if the stringify above was slightly different
+    textToReply = textToReply.replace(/\{[\s\S]*?\}/g, "").trim();
 
-      if (textToReply) {
-          await bot.sendMessage(msg.chat.id, textToReply, {
-              reply_to_message_id: msg.message_id,
-              allow_sending_without_reply: true
-          });
-      }
+    if (textToReply) {
+      await bot.sendMessage(msg.chat.id, textToReply, {
+        reply_to_message_id: msg.message_id,
+        allow_sending_without_reply: true
+      });
+    }
 
-      for (const pollData of polls) {
-          try {
-              let correctIndex = parseInt(pollData.correct_option_id ?? pollData.correct_option_index);
-              if (isNaN(correctIndex) || correctIndex < 0 || correctIndex >= pollData.options.length) {
-                  correctIndex = 0; // fallback to first option if index is invalid
-              }
+    for (const pollData of polls) {
+      try {
+        let correctIndex = parseInt(pollData.correct_option_id ?? pollData.correct_option_index);
+        if (isNaN(correctIndex) || correctIndex < 0 || correctIndex >= pollData.options.length) {
+          correctIndex = 0; // fallback to first option if index is invalid
+        }
 
-              await bot.sendPoll(msg.chat.id, pollData.question, pollData.options, {
-                  is_anonymous: false,
-                  type: "quiz",
-                  correct_option_id: correctIndex,
-                  explanation: pollData.explanation || "",
-                  reply_to_message_id: msg.message_id
-              });
-          } catch (pollErr) {
-              console.error("Failed to send native poll:", pollErr.message);
-          }
+        await bot.sendPoll(msg.chat.id, pollData.question, pollData.options, {
+          is_anonymous: false,
+          type: "quiz",
+          correct_option_id: correctIndex,
+          explanation: pollData.explanation || "",
+          reply_to_message_id: msg.message_id
+        });
+      } catch (pollErr) {
+        console.error("Failed to send native poll:", pollErr.message);
       }
-      return;
+    }
+    return;
   }
 
   await bot.sendMessage(msg.chat.id, reply, {
     reply_to_message_id: msg.message_id,
-    allow_sending_without_reply: true
+    allow_sending_without_reply: true,
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: "STOP ME",
+            callback_data: `self_ignore:${msg.from.id}`
+          },
+          {
+            text: "CHAT WITH ME",
+            callback_data: "chat_with_me"
+          }
+        ]
+      ]
+    }
   });
 
   const extracted = await groqService.extractMeaningfulMemory({
@@ -214,6 +228,54 @@ async function handleGroupMessage(bot, msg, services, commandHandler, config, st
 }
 
 export function setupEvents(bot, services, commandHandler, config, state) {
+  bot.on("callback_query", async (query) => {
+    try {
+      const { data, from, message } = query;
+      // Handle Self-Ignore
+      if (data.startsWith("self_ignore:")) {
+        const targetUserId = Number(data.split(":")[1]);
+        if (from.id !== targetUserId) {
+          await bot.answerCallbackQuery(query.id, {
+            text: "❌ You are not authorized to use this button. This was meant for the original user.",
+            show_alert: true
+          });
+          return;
+        }
+        await services.memoryService.addIgnoredUser(config.ownerUserId, from.id);
+        await bot.answerCallbackQuery(query.id, {
+          text: "✅ You have been self-blocked. The bot will no longer respond to your messages.",
+          show_alert: true
+        });
+        await bot.editMessageReplyMarkup({ inline_keyboard: [] }, {
+          chat_id: message.chat.id,
+          message_id: message.message_id
+        });
+        return;
+      }
+
+      // Handle Chat With Me (Unblock/Ready)
+      if (data === "chat_with_me") {
+        const ignoredUserIds = await services.memoryService.getIgnoredUserIds(config.ownerUserId);
+        const isBlocked = ignoredUserIds.includes(from.id);
+
+        if (isBlocked) {
+          await services.memoryService.removeIgnoredUser(config.ownerUserId, from.id);
+          await bot.answerCallbackQuery(query.id, {
+            text: "🔓 You are now unblocked! I will respond to your messages again.",
+            show_alert: true
+          });
+        } else {
+          await bot.answerCallbackQuery(query.id, {
+            text: "✨ I'm ready to chat with you! Just tag me or reply.",
+            show_alert: true
+          });
+        }
+      }
+    } catch (err) {
+      console.error("Callback query handler failed:", err.message);
+    }
+  });
+
   bot.on("message", async (msg) => {
     try {
       if (msg.new_chat_members) {

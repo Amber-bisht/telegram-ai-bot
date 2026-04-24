@@ -365,6 +365,26 @@ export class MemoryService {
     return normalized.ignoredUserIds;
   }
 
+  async removeIgnoredUser(ownerUserId, targetUserId) {
+    const userId = Number(targetUserId);
+    if (!Number.isFinite(userId)) return [];
+
+    const updated = await OwnerFeed.findOneAndUpdate(
+      { ownerUserId },
+      {
+        $pull: {
+          ignoredUserIds: userId
+        }
+      },
+      { new: true, lean: true }
+    );
+
+    if (!updated) return [];
+    const normalized = this.normalizeOwnerState(updated);
+    this.ownerFeedCache.set(String(ownerUserId), normalized);
+    return normalized.ignoredUserIds;
+  }
+
   async addOwnerFeed(ownerUserId, rawText) {
     const text = compactText(rawText, 800);
     if (!text) {
